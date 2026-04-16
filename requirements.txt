@@ -1,0 +1,4 @@
+flask
+APScheduler
+requests
+google-genai

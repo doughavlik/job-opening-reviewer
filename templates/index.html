@@ -1,0 +1,301 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Job Opening Reviewer</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css">
+  <style>
+    body { padding-top: 1.5rem; }
+    .truncate { max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .excerpt { font-size: 0.85rem; color: #555; max-width: 420px; }
+    .status-pending { color: #6c757d; }
+    .status-queued  { color: #0d6efd; }
+    .status-running { color: #0dcaf0; }
+    .status-done    { color: #198754; }
+    .status-error   { color: #dc3545; }
+    th.sortable { cursor: pointer; user-select: none; }
+    th.sortable.asc::after  { content: " \25B2"; font-size: 0.7em; }
+    th.sortable.desc::after { content: " \25BC"; font-size: 0.7em; }
+  </style>
+</head>
+<body>
+<div class="container-fluid px-4">
+
+  <h1 class="mb-3"><i class="bi bi-briefcase"></i> Job Opening Reviewer</h1>
+
+  <ul class="nav nav-tabs" id="mainTabs" role="tablist">
+    <li class="nav-item" role="presentation">
+      <button class="nav-link active" id="openings-tab" data-bs-toggle="tab"
+              data-bs-target="#openings" type="button" role="tab">Job Openings</button>
+    </li>
+    <li class="nav-item" role="presentation">
+      <button class="nav-link" id="settings-tab" data-bs-toggle="tab"
+              data-bs-target="#settings" type="button" role="tab">Settings</button>
+    </li>
+  </ul>
+
+  <div class="tab-content pt-3">
+
+    <!-- Job Openings ---------------------------------------------------- -->
+    <div class="tab-pane fade show active" id="openings" role="tabpanel">
+
+      <div class="mb-3 d-flex gap-2">
+        <button class="btn btn-primary" id="btnAdd">
+          <i class="bi bi-plus-lg"></i> Add Job Opening
+        </button>
+        <button class="btn btn-outline-secondary" id="btnRefresh">
+          <i class="bi bi-arrow-clockwise"></i> Refresh
+        </button>
+      </div>
+
+      <div id="addForm" class="card mb-3 d-none">
+        <div class="card-body">
+          <div class="input-group">
+            <input type="url" id="addUrl" class="form-control"
+                   placeholder="https://example.com/jobs/12345">
+            <button class="btn btn-success" id="addSave">Save</button>
+            <button class="btn btn-outline-secondary" id="addCancel">Cancel</button>
+          </div>
+        </div>
+      </div>
+
+      <table class="table table-hover align-middle">
+        <thead class="table-light">
+          <tr>
+            <th class="sortable" data-col="id">#</th>
+            <th class="sortable" data-col="url">Job Opening URL</th>
+            <th class="sortable" data-col="industry_experience">Industry Experience</th>
+            <th>Excerpt</th>
+            <th class="sortable" data-col="status">Status</th>
+            <th style="min-width: 260px;">Actions</th>
+          </tr>
+        </thead>
+        <tbody id="openingsBody"></tbody>
+      </table>
+    </div>
+
+    <!-- Settings -------------------------------------------------------- -->
+    <div class="tab-pane fade" id="settings" role="tabpanel">
+      <div class="card" style="max-width: 560px;">
+        <div class="card-body">
+          <h5 class="card-title">Google Gemini API key</h5>
+          <p class="text-muted small">Stored locally in SQLite. Leave blank to keep the current value.</p>
+          <div class="mb-3">
+            <label for="apiKeyInput" class="form-label">API key</label>
+            <input type="password" id="apiKeyInput" class="form-control" autocomplete="off">
+            <div class="form-text" id="apiKeyStatus"></div>
+          </div>
+          <button class="btn btn-primary" id="saveSettings">Save</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+<script>
+// ----- Simple AJAX helpers ------------------------------------------------
+async function api(path, opts = {}) {
+  const res = await fetch(path, {
+    headers: { "Content-Type": "application/json" },
+    ...opts,
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: res.statusText }));
+    throw new Error(err.error || res.statusText);
+  }
+  return res.json();
+}
+
+// ----- State --------------------------------------------------------------
+let openings = [];
+let sortCol = "id";
+let sortAsc = false;
+
+// ----- Rendering ----------------------------------------------------------
+function renderOpenings() {
+  const sorted = [...openings].sort((a, b) => {
+    const av = a[sortCol] ?? "";
+    const bv = b[sortCol] ?? "";
+    if (av < bv) return sortAsc ? -1 : 1;
+    if (av > bv) return sortAsc ? 1 : -1;
+    return 0;
+  });
+  const tbody = document.getElementById("openingsBody");
+  tbody.innerHTML = "";
+  for (const row of sorted) {
+    tbody.appendChild(buildRow(row));
+  }
+  document.querySelectorAll("th.sortable").forEach(th => {
+    th.classList.remove("asc", "desc");
+    if (th.dataset.col === sortCol) th.classList.add(sortAsc ? "asc" : "desc");
+  });
+}
+
+function buildRow(row) {
+  const tr = document.createElement("tr");
+  tr.dataset.id = row.id;
+
+  // ID
+  const tdId = document.createElement("td");
+  tdId.textContent = row.id;
+  tr.appendChild(tdId);
+
+  // URL (editable)
+  const tdUrl = document.createElement("td");
+  const aUrl = document.createElement("a");
+  aUrl.href = row.url;
+  aUrl.target = "_blank";
+  aUrl.rel = "noopener";
+  aUrl.className = "truncate d-inline-block";
+  aUrl.textContent = row.url;
+  aUrl.title = row.url;
+  tdUrl.appendChild(aUrl);
+  tr.appendChild(tdUrl);
+
+  // Industry
+  const tdInd = document.createElement("td");
+  tdInd.textContent = row.industry_experience || "";
+  tr.appendChild(tdInd);
+
+  // Excerpt
+  const tdEx = document.createElement("td");
+  tdEx.className = "excerpt";
+  tdEx.textContent = row.industry_excerpt || "";
+  tr.appendChild(tdEx);
+
+  // Status
+  const tdStatus = document.createElement("td");
+  tdStatus.className = "status-" + (row.status || "pending");
+  tdStatus.textContent = row.status || "pending";
+  if (row.error) tdStatus.title = row.error;
+  tr.appendChild(tdStatus);
+
+  // Actions
+  const tdAct = document.createElement("td");
+  tdAct.innerHTML = `
+    <button class="btn btn-sm btn-outline-primary me-1 btn-run"  title="Run Now"><i class="bi bi-play-fill"></i> Run Now</button>
+    <button class="btn btn-sm btn-outline-secondary me-1 btn-edit" title="Edit"><i class="bi bi-pencil"></i></button>
+    <button class="btn btn-sm btn-outline-danger btn-del"    title="Delete"><i class="bi bi-trash"></i></button>
+  `;
+  tdAct.querySelector(".btn-run").onclick   = () => runRow(row.id);
+  tdAct.querySelector(".btn-edit").onclick  = () => startEdit(tr, row);
+  tdAct.querySelector(".btn-del").onclick   = () => deleteRow(row.id);
+  tr.appendChild(tdAct);
+
+  return tr;
+}
+
+function startEdit(tr, row) {
+  const tdUrl = tr.children[1];
+  tdUrl.innerHTML = `<input class="form-control form-control-sm" value="${row.url.replace(/"/g,'&quot;')}">`;
+  const input = tdUrl.querySelector("input");
+
+  const tdAct = tr.children[5];
+  tdAct.innerHTML = `
+    <button class="btn btn-sm btn-success me-1 btn-save">Save</button>
+    <button class="btn btn-sm btn-outline-secondary btn-cancel">Cancel</button>
+  `;
+  tdAct.querySelector(".btn-save").onclick = async () => {
+    try {
+      await api(`/api/openings/${row.id}`, {
+        method: "PUT",
+        body: JSON.stringify({ url: input.value.trim() }),
+      });
+      await loadOpenings();
+    } catch (e) { alert("Save failed: " + e.message); }
+  };
+  tdAct.querySelector(".btn-cancel").onclick = () => loadOpenings();
+  input.focus();
+}
+
+async function runRow(id) {
+  try {
+    await api(`/api/openings/${id}/run`, { method: "POST" });
+    await loadOpenings();
+  } catch (e) { alert("Run failed: " + e.message); }
+}
+
+async function deleteRow(id) {
+  if (!confirm("Delete this job opening?")) return;
+  try {
+    await api(`/api/openings/${id}`, { method: "DELETE" });
+    await loadOpenings();
+  } catch (e) { alert("Delete failed: " + e.message); }
+}
+
+// ----- Data fetch + polling ----------------------------------------------
+async function loadOpenings() {
+  openings = await api("/api/openings");
+  renderOpenings();
+}
+
+async function pollIfRunning() {
+  if (openings.some(r => r.status === "queued" || r.status === "running")) {
+    await loadOpenings();
+  }
+}
+setInterval(pollIfRunning, 2000);
+
+// ----- Add flow -----------------------------------------------------------
+document.getElementById("btnAdd").onclick = () => {
+  document.getElementById("addForm").classList.remove("d-none");
+  document.getElementById("addUrl").focus();
+};
+document.getElementById("addCancel").onclick = () => {
+  document.getElementById("addForm").classList.add("d-none");
+  document.getElementById("addUrl").value = "";
+};
+document.getElementById("addSave").onclick = async () => {
+  const url = document.getElementById("addUrl").value.trim();
+  if (!url) return;
+  try {
+    await api("/api/openings", {
+      method: "POST",
+      body: JSON.stringify({ url }),
+    });
+    document.getElementById("addUrl").value = "";
+    document.getElementById("addForm").classList.add("d-none");
+    await loadOpenings();
+  } catch (e) { alert("Add failed: " + e.message); }
+};
+document.getElementById("btnRefresh").onclick = loadOpenings;
+
+// ----- Sorting ------------------------------------------------------------
+document.querySelectorAll("th.sortable").forEach(th => {
+  th.onclick = () => {
+    const col = th.dataset.col;
+    if (sortCol === col) sortAsc = !sortAsc;
+    else { sortCol = col; sortAsc = true; }
+    renderOpenings();
+  };
+});
+
+// ----- Settings -----------------------------------------------------------
+async function loadSettings() {
+  const s = await api("/api/settings");
+  const input = document.getElementById("apiKeyInput");
+  document.getElementById("apiKeyStatus").textContent =
+    s.gemini_api_key_set ? "A key is currently saved." : "No key set.";
+  input.placeholder = s.gemini_api_key_set ? "\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022 (saved)" : "";
+  input.value = "";
+}
+document.getElementById("saveSettings").onclick = async () => {
+  const v = document.getElementById("apiKeyInput").value.trim();
+  await api("/api/settings", {
+    method: "PUT",
+    body: JSON.stringify({ gemini_api_key: v }),
+  });
+  await loadSettings();
+  alert("Settings saved.");
+};
+document.getElementById("settings-tab").addEventListener("shown.bs.tab", loadSettings);
+
+// ----- Initial load -------------------------------------------------------
+loadOpenings();
+loadSettings();
+</script>
+</body>
+</html>
