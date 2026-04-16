@@ -15,6 +15,7 @@ import os
 import re
 import sqlite3
 import threading
+import time
 from contextlib import closing
 from pathlib import Path
 
@@ -175,24 +176,35 @@ def fetch_html(url: str) -> str:
     return resp.text
 
 
-def html_to_markdown(html: str) -> str:
-    # Cap size to keep prompt within reasonable limits.
-    snippet = html[:200_000]
+def _gemini_generate(prompt: str, max_retries: int = 4) -> str:
+    """Call Gemini with exponential backoff on 429 / transient errors."""
     client = _gemini_client()
-    response = client.models.generate_content(
-        model=MODEL_NAME,
-        contents=MARKDOWN_PROMPT.format(html=snippet),
-    )
-    return _strip_code_fences(response.text or "")
+    delay = 15  # seconds before first retry
+    for attempt in range(max_retries + 1):
+        try:
+            response = client.models.generate_content(
+                model=MODEL_NAME,
+                contents=prompt,
+            )
+            return response.text or ""
+        except Exception as exc:
+            is_rate_limit = "429" in str(exc) or "RESOURCE_EXHAUSTED" in str(exc)
+            if is_rate_limit and attempt < max_retries:
+                time.sleep(delay)
+                delay *= 2
+                continue
+            raise
+
+
+def html_to_markdown(html: str) -> str:
+    snippet = html[:200_000]
+    return _strip_code_fences(_gemini_generate(MARKDOWN_PROMPT.format(html=snippet)))
 
 
 def extract_industry(markdown: str) -> tuple[str, str]:
-    client = _gemini_client()
-    response = client.models.generate_content(
-        model=MODEL_NAME,
-        contents=INDUSTRY_PROMPT.format(markdown=markdown[:30_000]),
+    text = _strip_code_fences(
+        _gemini_generate(INDUSTRY_PROMPT.format(markdown=markdown[:30_000]))
     )
-    text = _strip_code_fences(response.text or "")
     try:
         data = json.loads(text)
     except json.JSONDecodeError:
