@@ -8,8 +8,6 @@
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css">
   <style>
     body { padding-top: 1.5rem; }
-    .truncate { max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .excerpt { font-size: 0.85rem; color: #555; max-width: 420px; }
     .status-pending { color: #6c757d; }
     .status-queued  { color: #0d6efd; }
     .status-running { color: #0dcaf0; }
@@ -18,9 +16,24 @@
     th.sortable { cursor: pointer; user-select: none; }
     th.sortable.asc::after  { content: " \25B2"; font-size: 0.7em; }
     th.sortable.desc::after { content: " \25BC"; font-size: 0.7em; }
-      .job-desc-cell { min-width: 220px; max-width: 320px; }
-    .job-desc-preview { font-size: 0.78rem; color: #444; white-space: pre-wrap; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 5; -webkit-box-orient: vertical; }
-</style>
+    .table-wrapper { overflow-x: auto; }
+    #openingsTable { table-layout: fixed; width: max-content; min-width: 100%; }
+    #openingsTable th { position: relative; overflow: hidden; white-space: nowrap; vertical-align: middle; }
+    #openingsTable td { overflow: hidden; vertical-align: middle; }
+    .resize-handle {
+      position: absolute; right: 0; top: 0; height: 100%; width: 5px;
+      cursor: col-resize; z-index: 1;
+    }
+    .resize-handle:hover, .resizing .resize-handle { background: rgba(0,0,0,0.2); }
+    .col-vis-menu label { cursor: pointer; display: flex; align-items: center; gap: 6px; padding: 6px 16px; }
+    .col-vis-menu label:hover { background: #f8f9fa; }
+    .job-desc-cell { display: flex; align-items: flex-start; gap: 6px; }
+    .job-desc-preview { font-size: 0.78rem; color: #444; white-space: pre-wrap; overflow: hidden;
+      display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; flex: 1; }
+    .truncate { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: block; }
+    .excerpt-text { font-size: 0.85rem; color: #555; overflow: hidden; display: -webkit-box;
+      -webkit-line-clamp: 3; -webkit-box-orient: vertical; }
+  </style>
 </head>
 <body>
 <div class="container-fluid px-4">
@@ -40,16 +53,24 @@
 
   <div class="tab-content pt-3">
 
-    <!-- Job Openings ---------------------------------------------------- -->
+    <!-- Job Openings -->
     <div class="tab-pane fade show active" id="openings" role="tabpanel">
 
-      <div class="mb-3 d-flex gap-2">
+      <div class="mb-3 d-flex gap-2 align-items-center flex-wrap">
         <button class="btn btn-primary" id="btnAdd">
           <i class="bi bi-plus-lg"></i> Add Job Opening
         </button>
         <button class="btn btn-outline-secondary" id="btnRefresh">
           <i class="bi bi-arrow-clockwise"></i> Refresh
         </button>
+        <div class="dropdown">
+          <button class="btn btn-outline-secondary dropdown-toggle" type="button"
+                  data-bs-toggle="dropdown" data-bs-auto-close="outside"
+                  aria-expanded="false">
+            <i class="bi bi-layout-three-columns"></i> Columns
+          </button>
+          <ul class="dropdown-menu col-vis-menu" id="colVisMenu" style="min-width:200px;"></ul>
+        </div>
       </div>
 
       <div id="addForm" class="card mb-3 d-none">
@@ -63,23 +84,16 @@
         </div>
       </div>
 
-      <table class="table table-hover align-middle">
-        <thead class="table-light">
-          <tr>
-            <th class="sortable" data-col="id">#</th>
-            <th class="sortable" data-col="url">Job Opening URL</th>
-            <th class="sortable" data-col="industry_experience">Industry Experience</th>
-            <th>Excerpt</th>
-            <th class="sortable" data-col="status">Status</th>
-            <th>Job Description</th>
-            <th style="min-width: 260px;">Actions</th>
-          </tr>
-        </thead>
-        <tbody id="openingsBody"></tbody>
-      </table>
+      <div class="table-wrapper">
+        <table class="table table-hover align-middle" id="openingsTable">
+          <colgroup id="openingsColgroup"></colgroup>
+          <thead class="table-light"><tr id="openingsThead"></tr></thead>
+          <tbody id="openingsBody"></tbody>
+        </table>
+      </div>
     </div>
 
-    <!-- Settings -------------------------------------------------------- -->
+    <!-- Settings -->
     <div class="tab-pane fade" id="settings" role="tabpanel">
       <div class="card" style="max-width: 560px;">
         <div class="card-body">
@@ -99,12 +113,42 @@
 
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
 <script>
-// ----- Simple AJAX helpers ------------------------------------------------
+// ─── Column definitions ───────────────────────────────────────────────────────
+const COLS = [
+  { id: 'col_id',   key: 'id',                  label: '#',                   sortable: true,  defaultWidth: 60,  hideable: true  },
+  { id: 'col_url',  key: 'url',                  label: 'Job Opening URL',     sortable: true,  defaultWidth: 260, hideable: true  },
+  { id: 'col_ind',  key: 'industry_experience',  label: 'Industry Experience', sortable: true,  defaultWidth: 180, hideable: true  },
+  { id: 'col_exc',  key: 'industry_excerpt',     label: 'Excerpt',             sortable: false, defaultWidth: 200, hideable: true  },
+  { id: 'col_desc', key: 'markdown',             label: 'Job Description',     sortable: false, defaultWidth: 240, hideable: true  },
+  { id: 'col_stat', key: 'status',               label: 'Status',              sortable: true,  defaultWidth: 100, hideable: true  },
+  { id: 'col_act',  key: null,                   label: 'Actions',             sortable: false, defaultWidth: 290, hideable: false },
+];
+
+// ─── Persistence ──────────────────────────────────────────────────────────────
+let colVis   = {};  // colId -> bool (true = visible)
+let colWidths = {}; // colId -> px number
+let sortCol  = 'id';
+let sortAsc  = false;
+
+function loadState() {
+  try { colVis    = JSON.parse(localStorage.getItem('jor_col_vis')    || '{}'); } catch {}
+  try { colWidths = JSON.parse(localStorage.getItem('jor_col_widths') || '{}'); } catch {}
+  try {
+    const s = JSON.parse(localStorage.getItem('jor_sort') || '{}');
+    if (s.col) sortCol = s.col;
+    if (s.asc !== undefined) sortAsc = !!s.asc;
+  } catch {}
+}
+function saveVis()    { localStorage.setItem('jor_col_vis',    JSON.stringify(colVis));    }
+function saveWidths() { localStorage.setItem('jor_col_widths', JSON.stringify(colWidths)); }
+function saveSort()   { localStorage.setItem('jor_sort',       JSON.stringify({ col: sortCol, asc: sortAsc })); }
+
+function isVisible(id) { return colVis[id] !== false; }
+function colWidth(col)  { return colWidths[col.id] || col.defaultWidth; }
+
+// ─── API helpers ─────────────────────────────────────────────────────────────
 async function api(path, opts = {}) {
-  const res = await fetch(path, {
-    headers: { "Content-Type": "application/json" },
-    ...opts,
-  });
+  const res = await fetch(path, { headers: { 'Content-Type': 'application/json' }, ...opts });
   if (!res.ok) {
     const err = await res.json().catch(() => ({ error: res.statusText }));
     throw new Error(err.error || res.statusText);
@@ -112,215 +156,302 @@ async function api(path, opts = {}) {
   return res.json();
 }
 
-// ----- State --------------------------------------------------------------
+// ─── Data ────────────────────────────────────────────────────────────────────
 let openings = [];
-let sortCol = "id";
-let sortAsc = false;
 
-// ----- Rendering ----------------------------------------------------------
+// ─── Table rendering ─────────────────────────────────────────────────────────
+function buildColgroup() {
+  const cg = document.getElementById('openingsColgroup');
+  cg.innerHTML = '';
+  for (const col of COLS) {
+    if (!isVisible(col.id)) continue;
+    const c = document.createElement('col');
+    c.dataset.colId = col.id;
+    c.style.width = colWidth(col) + 'px';
+    cg.appendChild(c);
+  }
+}
+
+function buildHeader() {
+  const tr = document.getElementById('openingsThead');
+  tr.innerHTML = '';
+  for (const col of COLS) {
+    if (!isVisible(col.id)) continue;
+    const th = document.createElement('th');
+    th.dataset.colId = col.id;
+    if (col.sortable) {
+      th.className = 'sortable';
+      if (col.key === sortCol) th.classList.add(sortAsc ? 'asc' : 'desc');
+      th.addEventListener('click', e => {
+        if (e.target.classList.contains('resize-handle')) return;
+        if (sortCol === col.key) sortAsc = !sortAsc;
+        else { sortCol = col.key; sortAsc = true; }
+        saveSort();
+        renderOpenings();
+      });
+    }
+    th.appendChild(document.createTextNode(col.label));
+    const rh = document.createElement('div');
+    rh.className = 'resize-handle';
+    rh.addEventListener('mousedown', e => startResize(e, col));
+    th.appendChild(rh);
+    tr.appendChild(th);
+  }
+}
+
+function renderTable() {
+  buildColgroup();
+  buildHeader();
+  renderOpenings();
+  buildColVisMenu();
+}
+
 function renderOpenings() {
   const sorted = [...openings].sort((a, b) => {
-    const av = a[sortCol] ?? "";
-    const bv = b[sortCol] ?? "";
+    const av = a[sortCol] ?? '';
+    const bv = b[sortCol] ?? '';
     if (av < bv) return sortAsc ? -1 : 1;
     if (av > bv) return sortAsc ? 1 : -1;
     return 0;
   });
-  const tbody = document.getElementById("openingsBody");
-  tbody.innerHTML = "";
-  for (const row of sorted) {
-    tbody.appendChild(buildRow(row));
-  }
-  document.querySelectorAll("th.sortable").forEach(th => {
-    th.classList.remove("asc", "desc");
-    if (th.dataset.col === sortCol) th.classList.add(sortAsc ? "asc" : "desc");
-  });
+  const tbody = document.getElementById('openingsBody');
+  tbody.innerHTML = '';
+  for (const row of sorted) tbody.appendChild(buildRow(row));
 }
 
 function buildRow(row) {
-  const tr = document.createElement("tr");
+  const tr = document.createElement('tr');
   tr.dataset.id = row.id;
 
-  // ID
-  const tdId = document.createElement("td");
-  tdId.textContent = row.id;
-  tr.appendChild(tdId);
+  for (const col of COLS) {
+    if (!isVisible(col.id)) continue;
+    const td = document.createElement('td');
+    td.dataset.colId = col.id;
 
-  // URL (editable)
-  const tdUrl = document.createElement("td");
-  const aUrl = document.createElement("a");
-  aUrl.href = row.url;
-  aUrl.target = "_blank";
-  aUrl.rel = "noopener";
-  aUrl.className = "truncate d-inline-block";
-  aUrl.textContent = row.url;
-  aUrl.title = row.url;
-  tdUrl.appendChild(aUrl);
-  tr.appendChild(tdUrl);
+    switch (col.id) {
+      case 'col_id':
+        td.textContent = row.id;
+        break;
 
-  // Industry
-  const tdInd = document.createElement("td");
-  tdInd.textContent = row.industry_experience || "";
-  tr.appendChild(tdInd);
+      case 'col_url': {
+        const a = document.createElement('a');
+        a.href = row.url; a.target = '_blank'; a.rel = 'noopener';
+        a.className = 'truncate'; a.textContent = row.url; a.title = row.url;
+        td.appendChild(a);
+        break;
+      }
 
-  // Excerpt
-  const tdEx = document.createElement("td");
-  tdEx.className = "excerpt";
-  tdEx.textContent = row.industry_excerpt || "";
-  tr.appendChild(tdEx);
+      case 'col_ind':
+        td.textContent = row.industry_experience || '';
+        break;
 
-  // Status
-  const tdStatus = document.createElement("td");
-  tdStatus.className = "status-" + (row.status || "pending");
-  tdStatus.textContent = row.status || "pending";
-  if (row.error) tdStatus.title = row.error;
-  tr.appendChild(tdStatus);
+      case 'col_exc': {
+        const d = document.createElement('div');
+        d.className = 'excerpt-text';
+        d.textContent = row.industry_excerpt || '';
+        td.appendChild(d);
+        break;
+      }
 
-  // Job Description
-  const tdMd = document.createElement("td");
-  tdMd.className = "job-desc-cell";
-  if (row.markdown) {
-    const preview = document.createElement("div");
-    preview.className = "job-desc-preview";
-    preview.textContent = row.markdown;
-    const btnCopy = document.createElement("button");
-    btnCopy.className = "btn btn-sm btn-outline-secondary mt-1";
-    btnCopy.innerHTML = '<i class="bi bi-clipboard"></i> Copy';
-    btnCopy.title = "Copy job description to clipboard";
-    btnCopy.onclick = () => {
-      navigator.clipboard.writeText(row.markdown).then(() => {
-        btnCopy.innerHTML = '<i class="bi bi-clipboard-check"></i> Copied!';
-        setTimeout(() => { btnCopy.innerHTML = '<i class="bi bi-clipboard"></i> Copy'; }, 2000);
-      }).catch(() => alert('Clipboard write failed'));
-    };
-    tdMd.appendChild(preview);
-    tdMd.appendChild(btnCopy);
-  } else {
-    tdMd.innerHTML = '<span class="text-muted small">—</span>';
+      case 'col_desc': {
+        const md = row.markdown || '';
+        if (md) {
+          const wrap = document.createElement('div');
+          wrap.className = 'job-desc-cell';
+          const prev = document.createElement('div');
+          prev.className = 'job-desc-preview';
+          prev.textContent = md;
+          const btn = document.createElement('button');
+          btn.className = 'btn btn-sm btn-outline-secondary flex-shrink-0';
+          btn.title = 'Copy job description to clipboard';
+          btn.innerHTML = '<i class="bi bi-clipboard"></i> Copy';
+          btn.addEventListener('click', () => {
+            navigator.clipboard.writeText(md).then(() => {
+              btn.innerHTML = '<i class="bi bi-clipboard-check"></i> Copied!';
+              setTimeout(() => { btn.innerHTML = '<i class="bi bi-clipboard"></i> Copy'; }, 2000);
+            }).catch(() => alert('Clipboard write failed'));
+          });
+          wrap.appendChild(prev);
+          wrap.appendChild(btn);
+          td.appendChild(wrap);
+        } else {
+          td.innerHTML = '<span class="text-muted small">—</span>';
+        }
+        break;
+      }
+
+      case 'col_stat':
+        td.className = 'status-' + (row.status || 'pending');
+        td.textContent = row.status || 'pending';
+        if (row.error) td.title = row.error;
+        break;
+
+      case 'col_act':
+        td.innerHTML = `
+          <button class="btn btn-sm btn-outline-primary me-1 btn-run" title="Run Now"><i class="bi bi-play-fill"></i> Run Now</button>
+          <button class="btn btn-sm btn-outline-secondary me-1 btn-edit" title="Edit"><i class="bi bi-pencil"></i></button>
+          <button class="btn btn-sm btn-outline-danger btn-del" title="Delete"><i class="bi bi-trash"></i></button>`;
+        td.querySelector('.btn-run').onclick  = () => runRow(row.id);
+        td.querySelector('.btn-edit').onclick = () => startEdit(tr, row);
+        td.querySelector('.btn-del').onclick  = () => deleteRow(row.id);
+        break;
+    }
+    tr.appendChild(td);
   }
-  tr.appendChild(tdMd);
-
-  // Actions
-  const tdAct = document.createElement("td");
-  tdAct.innerHTML = `
-    <button class="btn btn-sm btn-outline-primary me-1 btn-run"  title="Run Now"><i class="bi bi-play-fill"></i> Run Now</button>
-    <button class="btn btn-sm btn-outline-secondary me-1 btn-edit" title="Edit"><i class="bi bi-pencil"></i></button>
-    <button class="btn btn-sm btn-outline-danger btn-del"    title="Delete"><i class="bi bi-trash"></i></button>
-  `;
-  tdAct.querySelector(".btn-run").onclick   = () => runRow(row.id);
-  tdAct.querySelector(".btn-edit").onclick  = () => startEdit(tr, row);
-  tdAct.querySelector(".btn-del").onclick   = () => deleteRow(row.id);
-  tr.appendChild(tdAct);
-
   return tr;
 }
 
 function startEdit(tr, row) {
-  const tdUrl = tr.children[1];
-  tdUrl.innerHTML = `<input class="form-control form-control-sm" value="${row.url.replace(/"/g,'&quot;')}">`;
-  const input = tdUrl.querySelector("input");
+  const tdUrl = tr.querySelector('[data-col-id="col_url"]');
+  const tdAct = tr.querySelector('[data-col-id="col_act"]');
+  if (!tdAct) return;
 
-  const tdAct = tr.children[6];
+  if (!tdUrl) {
+    const newUrl = prompt('Edit URL:', row.url);
+    if (newUrl && newUrl.trim()) {
+      api(`/api/openings/${row.id}`, { method: 'PUT', body: JSON.stringify({ url: newUrl.trim() }) })
+        .then(() => loadOpenings()).catch(e => alert('Save failed: ' + e.message));
+    }
+    return;
+  }
+
+  tdUrl.innerHTML = `<input class="form-control form-control-sm" value="${row.url.replace(/"/g, '&quot;')}">`;
+  const input = tdUrl.querySelector('input');
   tdAct.innerHTML = `
     <button class="btn btn-sm btn-success me-1 btn-save">Save</button>
-    <button class="btn btn-sm btn-outline-secondary btn-cancel">Cancel</button>
-  `;
-  tdAct.querySelector(".btn-save").onclick = async () => {
+    <button class="btn btn-sm btn-outline-secondary btn-cancel">Cancel</button>`;
+  tdAct.querySelector('.btn-save').onclick = async () => {
     try {
-      await api(`/api/openings/${row.id}`, {
-        method: "PUT",
-        body: JSON.stringify({ url: input.value.trim() }),
-      });
+      await api(`/api/openings/${row.id}`, { method: 'PUT', body: JSON.stringify({ url: input.value.trim() }) });
       await loadOpenings();
-    } catch (e) { alert("Save failed: " + e.message); }
+    } catch (e) { alert('Save failed: ' + e.message); }
   };
-  tdAct.querySelector(".btn-cancel").onclick = () => loadOpenings();
+  tdAct.querySelector('.btn-cancel').onclick = () => loadOpenings();
   input.focus();
 }
 
-async function runRow(id) {
-  try {
-    await api(`/api/openings/${id}/run`, { method: "POST" });
-    await loadOpenings();
-  } catch (e) { alert("Run failed: " + e.message); }
+// ─── Column visibility menu ───────────────────────────────────────────────────
+function buildColVisMenu() {
+  const menu = document.getElementById('colVisMenu');
+  menu.innerHTML = '';
+  for (const col of COLS) {
+    if (!col.hideable) continue;
+    const li = document.createElement('li');
+    const label = document.createElement('label');
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.checked = isVisible(col.id);
+    cb.addEventListener('change', () => {
+      colVis[col.id] = cb.checked;
+      saveVis();
+      renderTable();
+    });
+    label.appendChild(cb);
+    label.appendChild(document.createTextNode(' ' + col.label));
+    li.appendChild(label);
+    menu.appendChild(li);
+  }
 }
 
-async function deleteRow(id) {
-  if (!confirm("Delete this job opening?")) return;
-  try {
-    await api(`/api/openings/${id}`, { method: "DELETE" });
-    await loadOpenings();
-  } catch (e) { alert("Delete failed: " + e.message); }
+// ─── Column resize ────────────────────────────────────────────────────────────
+let resizing = null;
+
+function startResize(e, col) {
+  e.preventDefault();
+  e.stopPropagation();
+  const colEl = document.querySelector(`#openingsColgroup [data-col-id="${col.id}"]`);
+  const th    = document.querySelector(`#openingsThead    [data-col-id="${col.id}"]`);
+  if (!colEl || !th) return;
+  resizing = { col, colEl, startX: e.clientX, startWidth: th.getBoundingClientRect().width };
+  document.body.style.cursor = 'col-resize';
+  document.body.style.userSelect = 'none';
+  document.addEventListener('mousemove', doResize);
+  document.addEventListener('mouseup', endResize);
 }
 
-// ----- Data fetch + polling ----------------------------------------------
+function doResize(e) {
+  if (!resizing) return;
+  const { col, colEl, startX, startWidth } = resizing;
+  const w = Math.max(50, startWidth + e.clientX - startX);
+  colEl.style.width = w + 'px';
+  colWidths[col.id] = w;
+}
+
+function endResize() {
+  if (!resizing) return;
+  saveWidths();
+  resizing = null;
+  document.body.style.cursor = '';
+  document.body.style.userSelect = '';
+  document.removeEventListener('mousemove', doResize);
+  document.removeEventListener('mouseup', endResize);
+}
+
+// ─── Data fetch + polling ─────────────────────────────────────────────────────
 async function loadOpenings() {
-  openings = await api("/api/openings");
+  openings = await api('/api/openings');
   renderOpenings();
 }
 
 async function pollIfRunning() {
-  if (openings.some(r => r.status === "queued" || r.status === "running")) {
+  if (openings.some(r => r.status === 'queued' || r.status === 'running')) {
     await loadOpenings();
   }
 }
 setInterval(pollIfRunning, 2000);
 
-// ----- Add flow -----------------------------------------------------------
-document.getElementById("btnAdd").onclick = () => {
-  document.getElementById("addForm").classList.remove("d-none");
-  document.getElementById("addUrl").focus();
+// ─── Row actions ─────────────────────────────────────────────────────────────
+async function runRow(id) {
+  try { await api(`/api/openings/${id}/run`, { method: 'POST' }); await loadOpenings(); }
+  catch (e) { alert('Run failed: ' + e.message); }
+}
+async function deleteRow(id) {
+  if (!confirm('Delete this job opening?')) return;
+  try { await api(`/api/openings/${id}`, { method: 'DELETE' }); await loadOpenings(); }
+  catch (e) { alert('Delete failed: ' + e.message); }
+}
+
+// ─── Add flow ─────────────────────────────────────────────────────────────────
+document.getElementById('btnAdd').onclick = () => {
+  document.getElementById('addForm').classList.remove('d-none');
+  document.getElementById('addUrl').focus();
 };
-document.getElementById("addCancel").onclick = () => {
-  document.getElementById("addForm").classList.add("d-none");
-  document.getElementById("addUrl").value = "";
+document.getElementById('addCancel').onclick = () => {
+  document.getElementById('addForm').classList.add('d-none');
+  document.getElementById('addUrl').value = '';
 };
-document.getElementById("addSave").onclick = async () => {
-  const url = document.getElementById("addUrl").value.trim();
+document.getElementById('addSave').onclick = async () => {
+  const url = document.getElementById('addUrl').value.trim();
   if (!url) return;
   try {
-    await api("/api/openings", {
-      method: "POST",
-      body: JSON.stringify({ url }),
-    });
-    document.getElementById("addUrl").value = "";
-    document.getElementById("addForm").classList.add("d-none");
+    await api('/api/openings', { method: 'POST', body: JSON.stringify({ url }) });
+    document.getElementById('addUrl').value = '';
+    document.getElementById('addForm').classList.add('d-none');
     await loadOpenings();
-  } catch (e) { alert("Add failed: " + e.message); }
+  } catch (e) { alert('Add failed: ' + e.message); }
 };
-document.getElementById("btnRefresh").onclick = loadOpenings;
+document.getElementById('btnRefresh').onclick = loadOpenings;
 
-// ----- Sorting ------------------------------------------------------------
-document.querySelectorAll("th.sortable").forEach(th => {
-  th.onclick = () => {
-    const col = th.dataset.col;
-    if (sortCol === col) sortAsc = !sortAsc;
-    else { sortCol = col; sortAsc = true; }
-    renderOpenings();
-  };
-});
-
-// ----- Settings -----------------------------------------------------------
+// ─── Settings ─────────────────────────────────────────────────────────────────
 async function loadSettings() {
-  const s = await api("/api/settings");
-  const input = document.getElementById("apiKeyInput");
-  document.getElementById("apiKeyStatus").textContent =
-    s.gemini_api_key_set ? "A key is currently saved." : "No key set.";
-  input.placeholder = s.gemini_api_key_set ? "\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022 (saved)" : "";
-  input.value = "";
+  const s = await api('/api/settings');
+  document.getElementById('apiKeyStatus').textContent =
+    s.gemini_api_key_set ? 'A key is currently saved.' : 'No key set.';
+  document.getElementById('apiKeyInput').placeholder =
+    s.gemini_api_key_set ? '\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022 (saved)' : '';
+  document.getElementById('apiKeyInput').value = '';
 }
-document.getElementById("saveSettings").onclick = async () => {
-  const v = document.getElementById("apiKeyInput").value.trim();
-  await api("/api/settings", {
-    method: "PUT",
-    body: JSON.stringify({ gemini_api_key: v }),
-  });
+document.getElementById('saveSettings').onclick = async () => {
+  const v = document.getElementById('apiKeyInput').value.trim();
+  await api('/api/settings', { method: 'PUT', body: JSON.stringify({ gemini_api_key: v }) });
   await loadSettings();
-  alert("Settings saved.");
+  alert('Settings saved.');
 };
-document.getElementById("settings-tab").addEventListener("shown.bs.tab", loadSettings);
+document.getElementById('settings-tab').addEventListener('shown.bs.tab', loadSettings);
 
-// ----- Initial load -------------------------------------------------------
+// ─── Init ─────────────────────────────────────────────────────────────────────
+loadState();
+renderTable();
 loadOpenings();
 loadSettings();
 </script>
