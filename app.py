@@ -276,7 +276,7 @@ def index() -> str:
 @app.get("/api/openings")
 def list_openings():
     rows = get_db().execute(
-        "SELECT id, url, industry_experience, industry_excerpt, status, error, "
+        "SELECT id, url, markdown, industry_experience, industry_excerpt, status, error, "
         "updated_at FROM job_openings ORDER BY id DESC"
     ).fetchall()
     return jsonify([dict(r) for r in rows])

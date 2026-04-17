@@ -18,7 +18,9 @@
     th.sortable { cursor: pointer; user-select: none; }
     th.sortable.asc::after  { content: " \25B2"; font-size: 0.7em; }
     th.sortable.desc::after { content: " \25BC"; font-size: 0.7em; }
-  </style>
+      .job-desc-cell { min-width: 220px; max-width: 320px; }
+    .job-desc-preview { font-size: 0.78rem; color: #444; white-space: pre-wrap; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 5; -webkit-box-orient: vertical; }
+</style>
 </head>
 <body>
 <div class="container-fluid px-4">
@@ -69,6 +71,7 @@
             <th class="sortable" data-col="industry_experience">Industry Experience</th>
             <th>Excerpt</th>
             <th class="sortable" data-col="status">Status</th>
+            <th>Job Description</th>
             <th style="min-width: 260px;">Actions</th>
           </tr>
         </thead>
@@ -173,6 +176,30 @@ function buildRow(row) {
   if (row.error) tdStatus.title = row.error;
   tr.appendChild(tdStatus);
 
+  // Job Description
+  const tdMd = document.createElement("td");
+  tdMd.className = "job-desc-cell";
+  if (row.markdown) {
+    const preview = document.createElement("div");
+    preview.className = "job-desc-preview";
+    preview.textContent = row.markdown;
+    const btnCopy = document.createElement("button");
+    btnCopy.className = "btn btn-sm btn-outline-secondary mt-1";
+    btnCopy.innerHTML = '<i class="bi bi-clipboard"></i> Copy';
+    btnCopy.title = "Copy job description to clipboard";
+    btnCopy.onclick = () => {
+      navigator.clipboard.writeText(row.markdown).then(() => {
+        btnCopy.innerHTML = '<i class="bi bi-clipboard-check"></i> Copied!';
+        setTimeout(() => { btnCopy.innerHTML = '<i class="bi bi-clipboard"></i> Copy'; }, 2000);
+      }).catch(() => alert('Clipboard write failed'));
+    };
+    tdMd.appendChild(preview);
+    tdMd.appendChild(btnCopy);
+  } else {
+    tdMd.innerHTML = '<span class="text-muted small">—</span>';
+  }
+  tr.appendChild(tdMd);
+
   // Actions
   const tdAct = document.createElement("td");
   tdAct.innerHTML = `
@@ -193,7 +220,7 @@ function startEdit(tr, row) {
   tdUrl.innerHTML = `<input class="form-control form-control-sm" value="${row.url.replace(/"/g,'&quot;')}">`;
   const input = tdUrl.querySelector("input");
 
-  const tdAct = tr.children[5];
+  const tdAct = tr.children[6];
   tdAct.innerHTML = `
     <button class="btn btn-sm btn-success me-1 btn-save">Save</button>
     <button class="btn btn-sm btn-outline-secondary btn-cancel">Cancel</button>
