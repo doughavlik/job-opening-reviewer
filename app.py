@@ -24,8 +24,10 @@ from flask import Flask, g, jsonify, render_template, request
 
 try:
     from google import genai
+    from google.genai import types as genai_types
 except ImportError:  # pragma: no cover - surfaced at runtime
     genai = None
+    genai_types = None
 
 APP_ROOT = Path(__file__).parent
 DB_PATH = APP_ROOT / "job_reviewer.db"
@@ -80,7 +82,9 @@ def init_db() -> None:
         }
         for col in (
             "recruiter_name",
+            "recruiter_title",
             "recruiter_linkedin",
+            "recruiter_email",
             "alternate_recruiters",
         ):
             if col not in existing_cols:
@@ -136,16 +140,33 @@ Read the job description below and return ONLY a JSON object with these keys:
     services, healthcare IT, cybersecurity, legal tech").
   - "industry_excerpt": a short verbatim excerpt from the job description
     justifying the "industries" value. Empty string when "industries" is "none".
-  - "primary_recruiter": {{"name": "...", "linkedin": "https://www.linkedin.com/in/..."}}
-    representing the single most likely recruiter for this role. Prefer any
-    recruiter / talent acquisition / hiring contact explicitly named in the
-    description. Otherwise infer from your knowledge of the hiring company's
-    talent acquisition / talent partner team for the role's function and
-    geography. Always provide your best guess — a real person's name and a
-    plausible linkedin.com/in/<slug> URL. Do not leave these blank.
-  - "alternate_recruiters": a list of 2-4 {{"name": "...", "linkedin": "..."}}
-    objects for other plausible recruiters for this role. Always include at
-    least 2 alternates.
+  - "primary_recruiter": a {{"name": "...", "title": "...", "linkedin": "...", "email": "..."}}
+    object identifying the single most likely recruiter for this role. Apply
+    these steps in order:
+      1. If the job description names a recruiter, talent acquisition partner,
+         or hiring contact, use that person.
+      2. Otherwise, search LinkedIn for this company's recruiting team and
+         pick the recruiter whose focus area (role function and geography)
+         best matches this specific job description.
+      3. Otherwise, search the company's own website — especially its About
+         Us, Our Team, Leadership, or Careers pages (often fruitful for
+         smaller companies) — for a named recruiter or people-team member.
+    Take the role's function (engineering / sales / GTM / design / etc.) and
+    geography into account when choosing.
+    Rules for each field:
+      - "name": the real person's name. LEAVE BLANK if you do not actually
+        know a specific person — do not invent or guess a name.
+      - "title": the person's current job title at this company if you know
+        it (e.g., "Senior Technical Recruiter, EMEA"), typically from their
+        LinkedIn profile or the company's Our Team page. Blank if unknown.
+      - "linkedin": the person's actual LinkedIn URL
+        (https://www.linkedin.com/in/<slug>) if you know it. LEAVE BLANK
+        rather than fabricating a slug.
+      - "email": the person's work email if you know it (often listed on
+        company team pages). Blank if unknown.
+  - "alternate_recruiters": a list of up to 3 other plausible recruiters for
+    this role, each using the same object schema and the same no-fabrication
+    rules. If fewer than 3 are actually known, return fewer — do not pad.
 
 Return ONLY the JSON object, no commentary.
 
@@ -191,15 +212,29 @@ def fetch_html(url: str) -> str:
     return resp.text
 
 
-def _gemini_generate(prompt: str, max_retries: int = 4) -> str:
-    """Call Gemini with exponential backoff on 429 / transient errors."""
+def _gemini_generate(
+    prompt: str,
+    max_retries: int = 4,
+    google_search: bool = False,
+) -> str:
+    """Call Gemini with exponential backoff on 429 / transient errors.
+
+    When google_search=True, enables the Google Search grounding tool so
+    the model can consult live sources (e.g., LinkedIn, company team pages).
+    """
     client = _gemini_client()
+    config = None
+    if google_search and genai_types is not None:
+        config = genai_types.GenerateContentConfig(
+            tools=[genai_types.Tool(google_search=genai_types.GoogleSearch())]
+        )
     delay = 15  # seconds before first retry
     for attempt in range(max_retries + 1):
         try:
             response = client.models.generate_content(
                 model=MODEL_NAME,
                 contents=prompt,
+                config=config,
             )
             return response.text or ""
         except Exception as exc:
@@ -236,10 +271,26 @@ def html_to_markdown(html: str) -> str:
     return _strip_code_fences(_gemini_generate(MARKDOWN_PROMPT.format(html=snippet)))
 
 
+def _clean_recruiter(obj) -> dict:
+    if not isinstance(obj, dict):
+        return {"name": "", "title": "", "linkedin": "", "email": ""}
+    return {
+        "name": str(obj.get("name", "")).strip(),
+        "title": str(obj.get("title", "")).strip(),
+        "linkedin": str(obj.get("linkedin", "")).strip(),
+        "email": str(obj.get("email", "")).strip(),
+    }
+
+
 def extract_fields(markdown: str) -> dict:
-    """Single Gemini call: industries + recruiter primary/alternates."""
+    """Single Gemini call with Google Search grounding:
+    industries + recruiter primary/alternates (name, title, linkedin, email).
+    """
     text = _strip_code_fences(
-        _gemini_generate(EXTRACT_PROMPT.format(markdown=markdown[:30_000]))
+        _gemini_generate(
+            EXTRACT_PROMPT.format(markdown=markdown[:30_000]),
+            google_search=True,
+        )
     )
     try:
         data = json.loads(text)
@@ -256,26 +307,23 @@ def extract_fields(markdown: str) -> dict:
     industries = str(data.get("industries", "none")).strip() or "none"
     excerpt = str(data.get("industry_excerpt", "")).strip()
 
-    primary = data.get("primary_recruiter") or {}
-    primary_name = str(primary.get("name", "")).strip()
-    primary_linkedin = str(primary.get("linkedin", "")).strip()
+    primary = _clean_recruiter(data.get("primary_recruiter"))
 
     alternates_raw = data.get("alternate_recruiters") or []
     alternates = []
     if isinstance(alternates_raw, list):
         for item in alternates_raw:
-            if not isinstance(item, dict):
-                continue
-            name = str(item.get("name", "")).strip()
-            linkedin = str(item.get("linkedin", "")).strip()
-            if name or linkedin:
-                alternates.append({"name": name, "linkedin": linkedin})
+            cleaned = _clean_recruiter(item)
+            if any(cleaned.values()):
+                alternates.append(cleaned)
 
     return {
         "industries": industries,
         "excerpt": excerpt,
-        "recruiter_name": primary_name,
-        "recruiter_linkedin": primary_linkedin,
+        "recruiter_name": primary["name"],
+        "recruiter_title": primary["title"],
+        "recruiter_linkedin": primary["linkedin"],
+        "recruiter_email": primary["email"],
         "alternate_recruiters": json.dumps(alternates),
     }
 
@@ -305,13 +353,16 @@ def process_opening(opening_id: int) -> None:
             """
             UPDATE job_openings
                SET markdown=?, industry_experience=?, industry_excerpt=?,
-                   recruiter_name=?, recruiter_linkedin=?, alternate_recruiters=?,
+                   recruiter_name=?, recruiter_title=?,
+                   recruiter_linkedin=?, recruiter_email=?,
+                   alternate_recruiters=?,
                    status='done', error=NULL,
                    updated_at=datetime('now')
              WHERE id=?
             """,
             (markdown, fields["industries"], fields["excerpt"],
-             fields["recruiter_name"], fields["recruiter_linkedin"],
+             fields["recruiter_name"], fields["recruiter_title"],
+             fields["recruiter_linkedin"], fields["recruiter_email"],
              fields["alternate_recruiters"],
              opening_id),
         )
@@ -343,7 +394,8 @@ def index() -> str:
 def list_openings():
     rows = get_db().execute(
         "SELECT id, url, markdown, industry_experience, industry_excerpt, "
-        "recruiter_name, recruiter_linkedin, alternate_recruiters, "
+        "recruiter_name, recruiter_title, recruiter_linkedin, recruiter_email, "
+        "alternate_recruiters, "
         "status, error, updated_at FROM job_openings ORDER BY id DESC"
     ).fetchall()
     return jsonify([dict(r) for r in rows])

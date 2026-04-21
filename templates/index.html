@@ -433,8 +433,12 @@ function renderRecruiterCell(td, row) {
 }
 
 function showRecruiterModal(row) {
-  const name = (row.recruiter_name || "").trim();
-  const linkedin = (row.recruiter_linkedin || "").trim();
+  const primary = {
+    name: (row.recruiter_name || "").trim(),
+    title: (row.recruiter_title || "").trim(),
+    linkedin: (row.recruiter_linkedin || "").trim(),
+    email: (row.recruiter_email || "").trim(),
+  };
   const alternates = parseAlternates(row.alternate_recruiters);
 
   const body = document.getElementById("recruiterModalBody");
@@ -443,7 +447,7 @@ function showRecruiterModal(row) {
   const primaryHdr = document.createElement("h6");
   primaryHdr.textContent = "Primary recruiter";
   body.appendChild(primaryHdr);
-  body.appendChild(renderRecruiterItem(name, linkedin, true));
+  body.appendChild(renderRecruiterItem(primary, true));
 
   const altHdr = document.createElement("h6");
   altHdr.className = "mt-3";
@@ -460,8 +464,8 @@ function showRecruiterModal(row) {
     ul.className = "list-unstyled mb-0";
     for (const alt of alternates) {
       const li = document.createElement("li");
-      li.className = "mb-1";
-      li.appendChild(renderRecruiterItem(alt.name, alt.linkedin, false));
+      li.className = "mb-2";
+      li.appendChild(renderRecruiterItem(alt, false));
       ul.appendChild(li);
     }
     body.appendChild(ul);
@@ -470,21 +474,47 @@ function showRecruiterModal(row) {
   bootstrap.Modal.getOrCreateInstance(document.getElementById("recruiterModal")).show();
 }
 
-function renderRecruiterItem(name, linkedin, bold) {
-  const span = document.createElement("span");
+function renderRecruiterItem(rec, bold) {
+  const wrap = document.createElement("div");
+  const name = (rec.name || "").trim();
+  const title = (rec.title || "").trim();
+  const linkedin = (rec.linkedin || "").trim();
+  const email = (rec.email || "").trim();
+
   const nameEl = document.createElement(bold ? "strong" : "span");
   nameEl.textContent = name || "(unnamed)";
-  span.appendChild(nameEl);
+  wrap.appendChild(nameEl);
+
+  if (title) {
+    const t = document.createElement("div");
+    t.className = "text-muted small";
+    t.textContent = title;
+    wrap.appendChild(t);
+  }
+
+  const links = document.createElement("div");
+  links.className = "small";
+  let hasLink = false;
   if (linkedin) {
-    span.appendChild(document.createTextNode(" "));
     const a = document.createElement("a");
     a.href = linkedin;
     a.target = "_blank";
     a.rel = "noopener";
     a.innerHTML = '<i class="bi bi-linkedin"></i> LinkedIn';
-    span.appendChild(a);
+    links.appendChild(a);
+    hasLink = true;
   }
-  return span;
+  if (email) {
+    if (hasLink) links.appendChild(document.createTextNode(" · "));
+    const a = document.createElement("a");
+    a.href = "mailto:" + email;
+    a.innerHTML = '<i class="bi bi-envelope"></i> ' + email;
+    links.appendChild(a);
+    hasLink = true;
+  }
+  if (hasLink) wrap.appendChild(links);
+
+  return wrap;
 }
 
 function startEdit(tr, row) {
