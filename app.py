@@ -29,7 +29,7 @@ except ImportError:  # pragma: no cover - surfaced at runtime
 
 APP_ROOT = Path(__file__).parent
 DB_PATH = APP_ROOT / "job_reviewer.db"
-MODEL_NAME = "gemini-2.0-flash"
+MODEL_NAME = "gemini-2.5-flash-lite"
 SECRET_PLACEHOLDER = "********"
 
 app = Flask(__name__)
@@ -75,6 +75,16 @@ def init_db() -> None:
             );
             """
         )
+        existing_cols = {
+            r[1] for r in conn.execute("PRAGMA table_info(job_openings)").fetchall()
+        }
+        for col in (
+            "recruiter_name",
+            "recruiter_linkedin",
+            "alternate_recruiters",
+        ):
+            if col not in existing_cols:
+                conn.execute(f"ALTER TABLE job_openings ADD COLUMN {col} TEXT")
         conn.commit()
 
 
@@ -117,22 +127,27 @@ Raw HTML:
 ---
 """
 
-INDUSTRY_PROMPT = """\
-You are extracting required industry experience from a job description.
+EXTRACT_PROMPT = """\
+Read the job description below and return ONLY a JSON object with these keys:
 
-Read the job description below and determine which industries (if any) the
-candidate is required, or strongly preferred, to have prior experience in.
+  - "industries": "none" OR a lowercase, comma+space-separated list of
+    industries the candidate is required or strongly preferred to have prior
+    experience in (e.g., "compliance, risk, legal, governance, financial
+    services, healthcare IT, cybersecurity, legal tech").
+  - "industry_excerpt": a short verbatim excerpt from the job description
+    justifying the "industries" value. Empty string when "industries" is "none".
+  - "primary_recruiter": {{"name": "...", "linkedin": "https://www.linkedin.com/in/..."}}
+    representing the single most likely recruiter for this role. Prefer any
+    recruiter / talent acquisition / hiring contact explicitly named in the
+    description. Otherwise infer from your knowledge of the hiring company's
+    talent acquisition / talent partner team for the role's function and
+    geography. Always provide your best guess — a real person's name and a
+    plausible linkedin.com/in/<slug> URL. Do not leave these blank.
+  - "alternate_recruiters": a list of 2-4 {{"name": "...", "linkedin": "..."}}
+    objects for other plausible recruiters for this role. Always include at
+    least 2 alternates.
 
-Return ONLY a JSON object with exactly these two keys:
-  - "industries": either the string "none" OR a comma-delimited string listing
-    the required industries (e.g., "compliance, risk, legal, governance,
-    financial services, healthcare IT, cybersecurity, legal tech"). Use
-    lowercase, comma+space separated.
-  - "excerpt": a short verbatim excerpt from the job description that justifies
-    your answer. If "industries" is "none", set this to an empty string.
-
-Example:
-{{"industries": "compliance, risk, legal, governance, financial services, healthcare IT, cybersecurity, legal tech", "excerpt": "Experience serving compliance, risk, legal, or governance buyers in financial services \u2014 or a strong track record in adjacent trust-sensitive environments (healthcare IT, cybersecurity, legal tech)"}}
+Return ONLY the JSON object, no commentary.
 
 Job Description (Markdown):
 ---
@@ -196,26 +211,73 @@ def _gemini_generate(prompt: str, max_retries: int = 4) -> str:
             raise
 
 
+_SCRIPT_STYLE_RE = re.compile(
+    r"<(script|style|noscript|svg|template)\b[^>]*>.*?</\1>",
+    re.IGNORECASE | re.DOTALL,
+)
+_COMMENT_RE = re.compile(r"<!--.*?-->", re.DOTALL)
+_TAG_CHROME_RE = re.compile(
+    r"<(nav|footer|header|aside)\b[^>]*>.*?</\1>",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def _strip_html_chrome(html: str) -> str:
+    """Remove scripts/styles/nav/footer/comments to shrink input sent to Gemini."""
+    html = _COMMENT_RE.sub("", html)
+    html = _SCRIPT_STYLE_RE.sub("", html)
+    html = _TAG_CHROME_RE.sub("", html)
+    return html
+
+
 def html_to_markdown(html: str) -> str:
-    snippet = html[:200_000]
+    cleaned = _strip_html_chrome(html)
+    snippet = cleaned[:80_000]
     return _strip_code_fences(_gemini_generate(MARKDOWN_PROMPT.format(html=snippet)))
 
 
-def extract_industry(markdown: str) -> tuple[str, str]:
+def extract_fields(markdown: str) -> dict:
+    """Single Gemini call: industries + recruiter primary/alternates."""
     text = _strip_code_fences(
-        _gemini_generate(INDUSTRY_PROMPT.format(markdown=markdown[:30_000]))
+        _gemini_generate(EXTRACT_PROMPT.format(markdown=markdown[:30_000]))
     )
     try:
         data = json.loads(text)
     except json.JSONDecodeError:
-        # Attempt to recover the first {...} block.
         match = re.search(r"\{.*\}", text, re.DOTALL)
         if not match:
-            raise
-        data = json.loads(match.group(0))
+            data = {}
+        else:
+            try:
+                data = json.loads(match.group(0))
+            except json.JSONDecodeError:
+                data = {}
+
     industries = str(data.get("industries", "none")).strip() or "none"
-    excerpt = str(data.get("excerpt", "")).strip()
-    return industries, excerpt
+    excerpt = str(data.get("industry_excerpt", "")).strip()
+
+    primary = data.get("primary_recruiter") or {}
+    primary_name = str(primary.get("name", "")).strip()
+    primary_linkedin = str(primary.get("linkedin", "")).strip()
+
+    alternates_raw = data.get("alternate_recruiters") or []
+    alternates = []
+    if isinstance(alternates_raw, list):
+        for item in alternates_raw:
+            if not isinstance(item, dict):
+                continue
+            name = str(item.get("name", "")).strip()
+            linkedin = str(item.get("linkedin", "")).strip()
+            if name or linkedin:
+                alternates.append({"name": name, "linkedin": linkedin})
+
+    return {
+        "industries": industries,
+        "excerpt": excerpt,
+        "recruiter_name": primary_name,
+        "recruiter_linkedin": primary_linkedin,
+        "alternate_recruiters": json.dumps(alternates),
+    }
 
 
 def process_opening(opening_id: int) -> None:
@@ -237,17 +299,21 @@ def process_opening(opening_id: int) -> None:
 
         html = fetch_html(url)
         markdown = html_to_markdown(html)
-        industries, excerpt = extract_industry(markdown)
+        fields = extract_fields(markdown)
 
         db.execute(
             """
             UPDATE job_openings
                SET markdown=?, industry_experience=?, industry_excerpt=?,
+                   recruiter_name=?, recruiter_linkedin=?, alternate_recruiters=?,
                    status='done', error=NULL,
                    updated_at=datetime('now')
              WHERE id=?
             """,
-            (markdown, industries, excerpt, opening_id),
+            (markdown, fields["industries"], fields["excerpt"],
+             fields["recruiter_name"], fields["recruiter_linkedin"],
+             fields["alternate_recruiters"],
+             opening_id),
         )
         db.commit()
     except Exception as exc:  # noqa: BLE001
@@ -276,8 +342,9 @@ def index() -> str:
 @app.get("/api/openings")
 def list_openings():
     rows = get_db().execute(
-        "SELECT id, url, markdown, industry_experience, industry_excerpt, status, error, "
-        "updated_at FROM job_openings ORDER BY id DESC"
+        "SELECT id, url, markdown, industry_experience, industry_excerpt, "
+        "recruiter_name, recruiter_linkedin, alternate_recruiters, "
+        "status, error, updated_at FROM job_openings ORDER BY id DESC"
     ).fetchall()
     return jsonify([dict(r) for r in rows])
 

@@ -86,6 +86,7 @@
               <th data-col-key="url" class="sortable" data-col="url">Job Opening URL</th>
               <th data-col-key="industry_experience" class="sortable" data-col="industry_experience">Industry Experience</th>
               <th data-col-key="industry_excerpt">Excerpt</th>
+              <th data-col-key="recruiter" class="sortable" data-col="recruiter_name">Recruiter</th>
               <th data-col-key="status" class="sortable" data-col="status">Status</th>
               <th data-col-key="markdown">Job Description</th>
               <th data-col-key="actions">Actions</th>
@@ -114,6 +115,22 @@
   </div>
 </div>
 
+<!-- Recruiter modal -->
+<div class="modal fade" id="recruiterModal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title"><i class="bi bi-person-badge"></i> Recruiters</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body" id="recruiterModalBody"></div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
 <script>
 // ----- Simple AJAX helpers ------------------------------------------------
@@ -135,6 +152,7 @@ const COLUMNS = [
   { key: "url",                 label: "Job Opening URL",     sortCol: "url",                 sortable: true,  hideable: true,  defaultWidth: 220 },
   { key: "industry_experience", label: "Industry Experience", sortCol: "industry_experience", sortable: true,  hideable: true,  defaultWidth: 160 },
   { key: "industry_excerpt",    label: "Excerpt",                                             sortable: false, hideable: true,  defaultWidth: 200 },
+  { key: "recruiter",            label: "Recruiter",           sortCol: "recruiter_name",      sortable: true,  hideable: true,  defaultWidth: 200 },
   { key: "status",              label: "Status",              sortCol: "status",              sortable: true,  hideable: true,  defaultWidth: 90  },
   { key: "markdown",            label: "Job Description",                                     sortable: false, hideable: true,  defaultWidth: 260 },
   { key: "actions",             label: "Actions",                                             sortable: false, hideable: false, defaultWidth: 280 },
@@ -300,6 +318,12 @@ function buildRow(row) {
   tdEx.textContent = row.industry_excerpt || "";
   tr.appendChild(tdEx);
 
+  // Recruiter
+  const tdRec = document.createElement("td");
+  tdRec.dataset.colKey = "recruiter";
+  renderRecruiterCell(tdRec, row);
+  tr.appendChild(tdRec);
+
   // Status
   const tdStatus = document.createElement("td");
   tdStatus.dataset.colKey = "status";
@@ -347,6 +371,120 @@ function buildRow(row) {
   tr.appendChild(tdAct);
 
   return tr;
+}
+
+function parseAlternates(raw) {
+  if (!raw) return [];
+  try {
+    const v = JSON.parse(raw);
+    return Array.isArray(v) ? v : [];
+  } catch {
+    return [];
+  }
+}
+
+function renderRecruiterCell(td, row) {
+  td.innerHTML = "";
+  const name = (row.recruiter_name || "").trim();
+  const linkedin = (row.recruiter_linkedin || "").trim();
+  const alternates = parseAlternates(row.alternate_recruiters);
+
+  if (!name && !linkedin && alternates.length === 0) {
+    td.innerHTML = '<span class="text-muted small">&mdash;</span>';
+    return;
+  }
+
+  const wrap = document.createElement("div");
+  wrap.style.cursor = "pointer";
+  wrap.title = "Click to see alternate recruiters";
+
+  if (name) {
+    const span = document.createElement("span");
+    span.textContent = name;
+    wrap.appendChild(span);
+  } else {
+    const span = document.createElement("span");
+    span.className = "text-muted small";
+    span.textContent = "(unnamed)";
+    wrap.appendChild(span);
+  }
+
+  if (linkedin) {
+    wrap.appendChild(document.createTextNode(" "));
+    const a = document.createElement("a");
+    a.href = linkedin;
+    a.target = "_blank";
+    a.rel = "noopener";
+    a.innerHTML = '<i class="bi bi-linkedin"></i>';
+    a.title = linkedin;
+    a.onclick = e => e.stopPropagation();
+    wrap.appendChild(a);
+  }
+
+  if (alternates.length > 0) {
+    const badge = document.createElement("span");
+    badge.className = "badge bg-secondary ms-2";
+    badge.textContent = "+" + alternates.length;
+    wrap.appendChild(badge);
+  }
+
+  wrap.onclick = () => showRecruiterModal(row);
+  td.appendChild(wrap);
+}
+
+function showRecruiterModal(row) {
+  const name = (row.recruiter_name || "").trim();
+  const linkedin = (row.recruiter_linkedin || "").trim();
+  const alternates = parseAlternates(row.alternate_recruiters);
+
+  const body = document.getElementById("recruiterModalBody");
+  body.innerHTML = "";
+
+  const primaryHdr = document.createElement("h6");
+  primaryHdr.textContent = "Primary recruiter";
+  body.appendChild(primaryHdr);
+  body.appendChild(renderRecruiterItem(name, linkedin, true));
+
+  const altHdr = document.createElement("h6");
+  altHdr.className = "mt-3";
+  altHdr.textContent = "Alternate recruiters";
+  body.appendChild(altHdr);
+
+  if (alternates.length === 0) {
+    const p = document.createElement("p");
+    p.className = "text-muted small mb-0";
+    p.textContent = "No alternates suggested.";
+    body.appendChild(p);
+  } else {
+    const ul = document.createElement("ul");
+    ul.className = "list-unstyled mb-0";
+    for (const alt of alternates) {
+      const li = document.createElement("li");
+      li.className = "mb-1";
+      li.appendChild(renderRecruiterItem(alt.name, alt.linkedin, false));
+      ul.appendChild(li);
+    }
+    body.appendChild(ul);
+  }
+
+  bootstrap.Modal.getOrCreateInstance(document.getElementById("recruiterModal")).show();
+}
+
+function renderRecruiterItem(name, linkedin, bold) {
+  const span = document.createElement("span");
+  const nameEl = document.createElement(bold ? "strong" : "span");
+  nameEl.textContent = name || "(unnamed)";
+  span.appendChild(nameEl);
+  if (linkedin) {
+    span.appendChild(document.createTextNode(" "));
+    const a = document.createElement("a");
+    a.href = linkedin;
+    a.target = "_blank";
+    a.rel = "noopener";
+    a.innerHTML = '<i class="bi bi-linkedin"></i> LinkedIn';
+    span.appendChild(a);
+  }
+  return span;
 }
 
 function startEdit(tr, row) {
