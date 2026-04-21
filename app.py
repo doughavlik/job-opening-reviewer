@@ -317,6 +317,10 @@ def extract_fields(markdown: str) -> dict:
             if any(cleaned.values()):
                 alternates.append(cleaned)
 
+    # Promote the first alternate to primary when primary is blank.
+    if not primary["name"] and alternates:
+        primary = alternates.pop(0)
+
     return {
         "industries": industries,
         "excerpt": excerpt,
