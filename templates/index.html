@@ -99,18 +99,29 @@
 
     <!-- Settings -------------------------------------------------------- -->
     <div class="tab-pane fade" id="settings" role="tabpanel">
-      <div class="card" style="max-width: 560px;">
+      <div class="card mb-3" style="max-width: 560px;">
         <div class="card-body">
           <h5 class="card-title">Google Gemini API key</h5>
-          <p class="text-muted small">Stored locally in SQLite. Leave blank to keep the current value.</p>
+          <p class="text-muted small">Used for HTML&rarr;markdown conversion. Stored locally in SQLite. Leave blank to keep the current value.</p>
           <div class="mb-3">
             <label for="apiKeyInput" class="form-label">API key</label>
             <input type="password" id="apiKeyInput" class="form-control" autocomplete="off">
             <div class="form-text" id="apiKeyStatus"></div>
           </div>
-          <button class="btn btn-primary" id="saveSettings">Save</button>
         </div>
       </div>
+      <div class="card mb-3" style="max-width: 560px;">
+        <div class="card-body">
+          <h5 class="card-title">Anthropic API key</h5>
+          <p class="text-muted small">Used for recruiter + industry extraction with web search. If set, Claude is used; otherwise Gemini is used for extraction too.</p>
+          <div class="mb-3">
+            <label for="anthropicKeyInput" class="form-label">API key</label>
+            <input type="password" id="anthropicKeyInput" class="form-control" autocomplete="off">
+            <div class="form-text" id="anthropicKeyStatus"></div>
+          </div>
+        </div>
+      </div>
+      <button class="btn btn-primary" id="saveSettings">Save</button>
     </div>
   </div>
 </div>
@@ -607,17 +618,24 @@ document.querySelectorAll("th.sortable").forEach(th => {
 // ----- Settings -----------------------------------------------------------
 async function loadSettings() {
   const s = await api("/api/settings");
-  const input = document.getElementById("apiKeyInput");
+  const gemInput = document.getElementById("apiKeyInput");
   document.getElementById("apiKeyStatus").textContent =
     s.gemini_api_key_set ? "A key is currently saved." : "No key set.";
-  input.placeholder = s.gemini_api_key_set ? "\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022 (saved)" : "";
-  input.value = "";
+  gemInput.placeholder = s.gemini_api_key_set ? "\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022 (saved)" : "";
+  gemInput.value = "";
+
+  const antInput = document.getElementById("anthropicKeyInput");
+  document.getElementById("anthropicKeyStatus").textContent =
+    s.anthropic_api_key_set ? "A key is currently saved." : "No key set.";
+  antInput.placeholder = s.anthropic_api_key_set ? "\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022 (saved)" : "";
+  antInput.value = "";
 }
 document.getElementById("saveSettings").onclick = async () => {
-  const v = document.getElementById("apiKeyInput").value.trim();
+  const gem = document.getElementById("apiKeyInput").value.trim();
+  const ant = document.getElementById("anthropicKeyInput").value.trim();
   await api("/api/settings", {
     method: "PUT",
-    body: JSON.stringify({ gemini_api_key: v }),
+    body: JSON.stringify({ gemini_api_key: gem, anthropic_api_key: ant }),
   });
   await loadSettings();
   alert("Settings saved.");

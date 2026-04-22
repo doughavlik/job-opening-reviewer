@@ -29,9 +29,17 @@ except ImportError:  # pragma: no cover - surfaced at runtime
     genai = None
     genai_types = None
 
+try:
+    import anthropic
+except ImportError:  # pragma: no cover - surfaced at runtime
+    anthropic = None
+
 APP_ROOT = Path(__file__).parent
 DB_PATH = APP_ROOT / "job_reviewer.db"
 MODEL_NAME = "gemini-2.5-flash-lite"
+ANTHROPIC_MODEL = "claude-sonnet-4-6"
+ANTHROPIC_MAX_TOKENS = 2048
+ANTHROPIC_MAX_WEB_SEARCHES = 5
 SECRET_PLACEHOLDER = "********"
 
 app = Flask(__name__)
@@ -111,6 +119,11 @@ def set_setting(key: str, value: str) -> None:
 def get_gemini_api_key() -> str | None:
     """Settings DB takes precedence; fall back to GEMINI_API_KEY env var."""
     return get_setting("gemini_api_key") or os.environ.get("GEMINI_API_KEY")
+
+
+def get_anthropic_api_key() -> str | None:
+    """Settings DB takes precedence; fall back to ANTHROPIC_API_KEY env var."""
+    return get_setting("anthropic_api_key") or os.environ.get("ANTHROPIC_API_KEY")
 
 
 # ---------------------------------------------------------------------------
@@ -195,6 +208,57 @@ def _gemini_client() -> "genai.Client":
             "No Gemini API key configured. Set it in the Settings tab."
         )
     return genai.Client(api_key=key)
+
+
+def _anthropic_client() -> "anthropic.Anthropic":
+    if anthropic is None:
+        raise RuntimeError(
+            "anthropic package is not installed. Run: pip install anthropic"
+        )
+    key = get_anthropic_api_key()
+    if not key:
+        raise RuntimeError(
+            "No Anthropic API key configured. Set it in the Settings tab."
+        )
+    return anthropic.Anthropic(api_key=key)
+
+
+def _anthropic_generate_with_web_search(prompt: str, max_retries: int = 4) -> str:
+    """Call Claude with the server-side web_search tool and return final text."""
+    client = _anthropic_client()
+    delay = 15
+    for attempt in range(max_retries + 1):
+        try:
+            response = client.messages.create(
+                model=ANTHROPIC_MODEL,
+                max_tokens=ANTHROPIC_MAX_TOKENS,
+                messages=[{"role": "user", "content": prompt}],
+                tools=[
+                    {
+                        "type": "web_search_20250305",
+                        "name": "web_search",
+                        "max_uses": ANTHROPIC_MAX_WEB_SEARCHES,
+                    }
+                ],
+            )
+            parts = []
+            for block in response.content:
+                if getattr(block, "type", None) == "text":
+                    parts.append(block.text)
+            return "".join(parts)
+        except Exception as exc:
+            msg = str(exc)
+            transient = (
+                "429" in msg
+                or "529" in msg
+                or "overloaded" in msg.lower()
+                or "rate_limit" in msg.lower()
+            )
+            if transient and attempt < max_retries:
+                time.sleep(delay)
+                delay *= 2
+                continue
+            raise
 
 
 def fetch_html(url: str) -> str:
@@ -283,15 +347,16 @@ def _clean_recruiter(obj) -> dict:
 
 
 def extract_fields(markdown: str) -> dict:
-    """Single Gemini call with Google Search grounding:
+    """Single Claude call with web_search tool:
     industries + recruiter primary/alternates (name, title, linkedin, email).
+    Falls back to Gemini if no Anthropic key is configured.
     """
-    text = _strip_code_fences(
-        _gemini_generate(
-            EXTRACT_PROMPT.format(markdown=markdown[:30_000]),
-            google_search=True,
-        )
-    )
+    prompt = EXTRACT_PROMPT.format(markdown=markdown[:30_000])
+    if get_anthropic_api_key():
+        raw = _anthropic_generate_with_web_search(prompt)
+    else:
+        raw = _gemini_generate(prompt, google_search=True)
+    text = _strip_code_fences(raw)
     try:
         data = json.loads(text)
     except json.JSONDecodeError:
@@ -474,16 +539,23 @@ def run_opening(opening_id: int):
 @app.get("/api/settings")
 def get_settings():
     # Never return the raw key; indicate presence only.
-    has_key = bool(get_gemini_api_key())
-    return jsonify({"gemini_api_key_set": has_key})
+    return jsonify(
+        {
+            "gemini_api_key_set": bool(get_gemini_api_key()),
+            "anthropic_api_key_set": bool(get_anthropic_api_key()),
+        }
+    )
 
 
 @app.put("/api/settings")
 def update_settings():
     data = request.get_json(force=True, silent=True) or {}
-    key = (data.get("gemini_api_key") or "").strip()
-    if key and key != SECRET_PLACEHOLDER:
-        set_setting("gemini_api_key", key)
+    gem = (data.get("gemini_api_key") or "").strip()
+    if gem and gem != SECRET_PLACEHOLDER:
+        set_setting("gemini_api_key", gem)
+    ant = (data.get("anthropic_api_key") or "").strip()
+    if ant and ant != SECRET_PLACEHOLDER:
+        set_setting("anthropic_api_key", ant)
     return jsonify({"ok": True})
 
 

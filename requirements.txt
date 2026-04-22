@@ -2,3 +2,4 @@ flask
 APScheduler
 requests
 google-genai
+anthropic
