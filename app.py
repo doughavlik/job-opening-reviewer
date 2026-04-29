@@ -302,8 +302,16 @@ def _gemini_generate(
             )
             return response.text or ""
         except Exception as exc:
-            is_rate_limit = "429" in str(exc) or "RESOURCE_EXHAUSTED" in str(exc)
-            if is_rate_limit and attempt < max_retries:
+            msg = str(exc)
+            is_transient = (
+                "429" in msg
+                or "RESOURCE_EXHAUSTED" in msg
+                or "503" in msg
+                or "UNAVAILABLE" in msg
+                or "500" in msg
+                or "INTERNAL" in msg
+            )
+            if is_transient and attempt < max_retries:
                 time.sleep(delay)
                 delay *= 2
                 continue
