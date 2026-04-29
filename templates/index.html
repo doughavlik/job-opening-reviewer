@@ -620,13 +620,17 @@ async function loadSettings() {
   const s = await api("/api/settings");
   const gemInput = document.getElementById("apiKeyInput");
   document.getElementById("apiKeyStatus").textContent =
-    s.gemini_api_key_set ? "A key is currently saved." : "No key set.";
+    s.gemini_api_key_set
+      ? `Saved key starts with: ${s.gemini_api_key_prefix}\u2026`
+      : "No key set.";
   gemInput.placeholder = s.gemini_api_key_set ? "\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022 (saved)" : "";
   gemInput.value = "";
 
   const antInput = document.getElementById("anthropicKeyInput");
   document.getElementById("anthropicKeyStatus").textContent =
-    s.anthropic_api_key_set ? "A key is currently saved." : "No key set.";
+    s.anthropic_api_key_set
+      ? `Saved key starts with: ${s.anthropic_api_key_prefix}\u2026`
+      : "No key set.";
   antInput.placeholder = s.anthropic_api_key_set ? "\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022 (saved)" : "";
   antInput.value = "";
 }

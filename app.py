@@ -646,11 +646,15 @@ def run_opening(opening_id: int):
 
 @app.get("/api/settings")
 def get_settings():
-    # Never return the raw key; indicate presence only.
+    # Never return the raw key; expose only a 7-char prefix for visual confirmation.
+    gem = get_gemini_api_key()
+    ant = get_anthropic_api_key()
     return jsonify(
         {
-            "gemini_api_key_set": bool(get_gemini_api_key()),
-            "anthropic_api_key_set": bool(get_anthropic_api_key()),
+            "gemini_api_key_set": bool(gem),
+            "gemini_api_key_prefix": (gem[:7] if gem else ""),
+            "anthropic_api_key_set": bool(ant),
+            "anthropic_api_key_prefix": (ant[:7] if ant else ""),
         }
     )
 
