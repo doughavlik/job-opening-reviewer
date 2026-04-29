@@ -15,7 +15,10 @@ Single-page Flask web app for monitoring job openings. Given a URL to a job desc
 
 ```bash
 pip install -r requirements.txt
+playwright install chromium
 ```
+
+The Playwright browser is used as a fallback for sites that fail a plain HTTP fetch (e.g., JavaScript-only single-page apps).
 
 ## Run
 

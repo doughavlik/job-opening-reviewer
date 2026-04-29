@@ -18,6 +18,7 @@ import threading
 import time
 from contextlib import closing
 from pathlib import Path
+from urllib.parse import urlparse
 
 import requests
 from flask import Flask, g, jsonify, render_template, request
@@ -261,19 +262,118 @@ def _anthropic_generate_with_web_search(prompt: str, max_retries: int = 4) -> st
             raise
 
 
-def fetch_html(url: str) -> str:
+_BROWSER_USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/122.0 Safari/537.36"
+)
+
+
+def _requests_fetch_html(url: str) -> str:
     headers = {
-        "User-Agent": (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/122.0 Safari/537.36"
-        ),
+        "User-Agent": _BROWSER_USER_AGENT,
         "Accept": "text/html,application/xhtml+xml",
         "Accept-Language": "en-US,en;q=0.9",
     }
     resp = requests.get(url, headers=headers, timeout=30, allow_redirects=True)
     resp.raise_for_status()
     return resp.text
+
+
+def _playwright_fetch_html(url: str) -> str:
+    """Render the page in headless Chromium and return the post-JS HTML."""
+    try:
+        from playwright.sync_api import sync_playwright  # type: ignore
+    except ImportError as exc:
+        raise RuntimeError(
+            "playwright is required for the JS-render fallback. Run: "
+            "pip install playwright && playwright install chromium"
+        ) from exc
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        try:
+            context = browser.new_context(user_agent=_BROWSER_USER_AGENT)
+            page = context.new_page()
+            page.goto(url, wait_until="networkidle", timeout=30_000)
+            return page.content()
+        finally:
+            browser.close()
+
+
+_APPONE_PATH_RE = re.compile(r"^/job/([0-9a-f]{16,})/?$", re.IGNORECASE)
+
+
+def _is_appone_url(url: str) -> bool:
+    parsed = urlparse(url)
+    return parsed.netloc.lower() == "apply.appone.com" and bool(
+        _APPONE_PATH_RE.match(parsed.path or "")
+    )
+
+
+def _appone_adapter(url: str) -> tuple[str, str]:
+    """Call AppOne's JSON job-posting API and synthesize markdown.
+
+    AppOne is a SPA whose deep paths return HTTP 404 with a content-free shell;
+    the real data lives at /api/apply/v2/jobposting/<id>. Falling through (by
+    raising) lets fetch_content try the Playwright fallback.
+    """
+    parsed = urlparse(url)
+    match = _APPONE_PATH_RE.match(parsed.path or "")
+    if not match:
+        raise ValueError(f"Not an AppOne job URL: {url}")
+    job_id = match.group(1)
+    api_url = f"https://apply.appone.com/api/apply/v2/jobposting/{job_id}"
+    resp = requests.get(
+        api_url,
+        headers={
+            "User-Agent": _BROWSER_USER_AGENT,
+            "Accept": "application/json",
+            "Referer": url,
+        },
+        timeout=30,
+    )
+    resp.raise_for_status()
+    data = resp.json()
+    title = (data.get("jobTitle") or "").strip() or "Job Posting"
+    location = (data.get("location") or "").strip()
+    job_type = (data.get("jobType") or "").strip()
+    description = (data.get("description") or "").strip()
+
+    parts = [f"# {title}", ""]
+    if location:
+        parts.append(f"**Location:** {location}")
+    if job_type:
+        parts.append(f"**Type:** {job_type}")
+    if location or job_type:
+        parts.append("")
+    parts.append(description)
+    return ("markdown", "\n".join(parts).strip() + "\n")
+
+
+# Registry of (predicate, adapter) pairs. Adapters return (kind, content)
+# where kind is "markdown" (skip Gemini's HTML->markdown step) or "html".
+ADAPTERS: list[tuple] = [
+    (_is_appone_url, _appone_adapter),
+]
+
+
+def fetch_content(url: str) -> tuple[str, str]:
+    """Fetch a job posting, returning (kind, content).
+
+    Tries per-host adapters first, then a plain HTTP GET, and finally a
+    headless-browser render so JS-only sites still work.
+    """
+    for matches, adapter in ADAPTERS:
+        if matches(url):
+            try:
+                return adapter(url)
+            except Exception:
+                break  # fall through to generic path
+    try:
+        return ("html", _requests_fetch_html(url))
+    except (requests.HTTPError, requests.RequestException):
+        return ("html", _playwright_fetch_html(url))
 
 
 def _gemini_generate(
@@ -422,8 +522,8 @@ def process_opening(opening_id: int) -> None:
         )
         db.commit()
 
-        html = fetch_html(url)
-        markdown = html_to_markdown(html)
+        kind, content = fetch_content(url)
+        markdown = content if kind == "markdown" else html_to_markdown(content)
         fields = extract_fields(markdown)
 
         db.execute(

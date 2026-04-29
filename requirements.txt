@@ -3,3 +3,4 @@ APScheduler
 requests
 google-genai
 anthropic
+playwright>=1.40
