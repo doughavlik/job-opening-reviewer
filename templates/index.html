@@ -19,7 +19,9 @@
     th.sortable.asc::after  { content: " \25B2"; font-size: 0.7em; }
     th.sortable.desc::after { content: " \25BC"; font-size: 0.7em; }
     .job-desc-cell { min-width: 220px; max-width: 320px; }
-    .job-desc-preview { font-size: 0.78rem; color: #444; white-space: pre-wrap; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 5; -webkit-box-orient: vertical; }
+    .markdown-teaser { font-size: 0.78rem; color: #444; white-space: pre-wrap; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+    .excerpt .markdown-teaser { font-size: 0.85rem; color: #555; }
+    .markdown-modal-body { white-space: pre-wrap; word-wrap: break-word; font-family: inherit; font-size: 0.9rem; margin: 0; }
     #openingsTable { table-layout: fixed; width: 100%; }
     #openingsTable th { position: relative; overflow: hidden; white-space: nowrap; }
     .resize-handle {
@@ -136,6 +138,25 @@
       </div>
       <div class="modal-body" id="recruiterModalBody"></div>
       <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Markdown content modal (Job Description / Excerpt) -->
+<div class="modal fade" id="markdownModal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-lg modal-dialog-scrollable">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="markdownModalTitle"><i class="bi bi-file-text"></i> Content</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body">
+        <pre id="markdownModalBody" class="markdown-modal-body"></pre>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-outline-secondary" id="markdownModalCopy"><i class="bi bi-clipboard"></i> Copy</button>
         <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
       </div>
     </div>
@@ -326,7 +347,19 @@ function buildRow(row) {
   const tdEx = document.createElement("td");
   tdEx.dataset.colKey = "industry_excerpt";
   tdEx.className = "excerpt";
-  tdEx.textContent = row.industry_excerpt || "";
+  const excerpt = row.industry_excerpt || "";
+  if (excerpt) {
+    const teaser = document.createElement("div");
+    teaser.className = "markdown-teaser";
+    teaser.textContent = excerpt;
+    const btnView = document.createElement("button");
+    btnView.className = "btn btn-sm btn-outline-secondary mt-1";
+    btnView.innerHTML = '<i class="bi bi-eye"></i> View';
+    btnView.title = "View full excerpt";
+    btnView.onclick = () => showMarkdownModal("Industry Excerpt", excerpt);
+    tdEx.appendChild(teaser);
+    tdEx.appendChild(btnView);
+  }
   tr.appendChild(tdEx);
 
   // Recruiter
@@ -348,21 +381,16 @@ function buildRow(row) {
   tdMd.dataset.colKey = "markdown";
   tdMd.className = "job-desc-cell";
   if (row.markdown) {
-    const preview = document.createElement("div");
-    preview.className = "job-desc-preview";
-    preview.textContent = row.markdown;
-    const btnCopy = document.createElement("button");
-    btnCopy.className = "btn btn-sm btn-outline-secondary mt-1";
-    btnCopy.innerHTML = '<i class="bi bi-clipboard"></i> Copy';
-    btnCopy.title = "Copy job description to clipboard";
-    btnCopy.onclick = () => {
-      navigator.clipboard.writeText(row.markdown).then(() => {
-        btnCopy.innerHTML = '<i class="bi bi-clipboard-check"></i> Copied!';
-        setTimeout(() => { btnCopy.innerHTML = '<i class="bi bi-clipboard"></i> Copy'; }, 2000);
-      }).catch(() => alert("Clipboard write failed"));
-    };
-    tdMd.appendChild(preview);
-    tdMd.appendChild(btnCopy);
+    const teaser = document.createElement("div");
+    teaser.className = "markdown-teaser";
+    teaser.textContent = row.markdown;
+    const btnView = document.createElement("button");
+    btnView.className = "btn btn-sm btn-outline-secondary mt-1";
+    btnView.innerHTML = '<i class="bi bi-eye"></i> View';
+    btnView.title = "View full job description";
+    btnView.onclick = () => showMarkdownModal("Job Description", row.markdown);
+    tdMd.appendChild(teaser);
+    tdMd.appendChild(btnView);
   } else {
     tdMd.innerHTML = '<span class="text-muted small">&mdash;</span>';
   }
@@ -441,6 +469,23 @@ function renderRecruiterCell(td, row) {
 
   wrap.onclick = () => showRecruiterModal(row);
   td.appendChild(wrap);
+}
+
+function showMarkdownModal(title, content) {
+  document.getElementById("markdownModalTitle").innerHTML =
+    '<i class="bi bi-file-text"></i> ' + title;
+  document.getElementById("markdownModalBody").textContent = content || "";
+  const copyBtn = document.getElementById("markdownModalCopy");
+  copyBtn.innerHTML = '<i class="bi bi-clipboard"></i> Copy';
+  copyBtn.onclick = () => {
+    navigator.clipboard.writeText(content || "").then(() => {
+      copyBtn.innerHTML = '<i class="bi bi-clipboard-check"></i> Copied!';
+      setTimeout(() => {
+        copyBtn.innerHTML = '<i class="bi bi-clipboard"></i> Copy';
+      }, 2000);
+    }).catch(() => alert("Clipboard write failed"));
+  };
+  bootstrap.Modal.getOrCreateInstance(document.getElementById("markdownModal")).show();
 }
 
 function showRecruiterModal(row) {
