@@ -95,6 +95,11 @@ def init_db() -> None:
             "recruiter_linkedin",
             "recruiter_email",
             "alternate_recruiters",
+            "title",
+            "company_name",
+            "location",
+            "employee_count",
+            "remote_mode",
         ):
             if col not in existing_cols:
                 conn.execute(f"ALTER TABLE job_openings ADD COLUMN {col} TEXT")
@@ -181,6 +186,18 @@ Read the job description below and return ONLY a JSON object with these keys:
   - "alternate_recruiters": a list of up to 3 other plausible recruiters for
     this role, each using the same object schema and the same no-fabrication
     rules. If fewer than 3 are actually known, return fewer — do not pad.
+  - "title": the verbatim job title from the posting (e.g., "Director,
+    Compliance & Risk"). Empty string if not found.
+  - "company_name": the hiring company. Empty string if not found.
+  - "location": the primary work location. Use "City, ST" for U.S. roles,
+    "Remote — US" for U.S.-anywhere remote, "Remote — Global" for global
+    remote, otherwise the best-effort string from the posting. Empty string
+    if not found.
+  - "employee_count": approximate global headcount of the company, formatted
+    with commas (e.g., "5,400"). Use ranges like "1,000-5,000" if the exact
+    figure is unknown. Empty string if not found.
+  - "remote_mode": exactly one of "Remote", "Hybrid", "In-office", "Other",
+    or "Unspecified". Use "Unspecified" if the posting does not say.
 
 Return ONLY the JSON object, no commentary.
 
@@ -494,6 +511,16 @@ def extract_fields(markdown: str) -> dict:
     if not primary["name"] and alternates:
         primary = alternates.pop(0)
 
+    title = str(data.get("title", "")).strip()
+    company_name = str(data.get("company_name", "")).strip()
+    location = str(data.get("location", "")).strip()
+    employee_count = str(data.get("employee_count", "")).strip()
+
+    remote_raw = str(data.get("remote_mode", "")).strip()
+    remote_mode = remote_raw if remote_raw in {
+        "Remote", "Hybrid", "In-office", "Other", "Unspecified",
+    } else "Unspecified"
+
     return {
         "industries": industries,
         "excerpt": excerpt,
@@ -502,6 +529,11 @@ def extract_fields(markdown: str) -> dict:
         "recruiter_linkedin": primary["linkedin"],
         "recruiter_email": primary["email"],
         "alternate_recruiters": json.dumps(alternates),
+        "title": title,
+        "company_name": company_name,
+        "location": location,
+        "employee_count": employee_count,
+        "remote_mode": remote_mode,
     }
 
 
@@ -533,6 +565,8 @@ def process_opening(opening_id: int) -> None:
                    recruiter_name=?, recruiter_title=?,
                    recruiter_linkedin=?, recruiter_email=?,
                    alternate_recruiters=?,
+                   title=?, company_name=?, location=?,
+                   employee_count=?, remote_mode=?,
                    status='done', error=NULL,
                    updated_at=datetime('now')
              WHERE id=?
@@ -541,6 +575,8 @@ def process_opening(opening_id: int) -> None:
              fields["recruiter_name"], fields["recruiter_title"],
              fields["recruiter_linkedin"], fields["recruiter_email"],
              fields["alternate_recruiters"],
+             fields["title"], fields["company_name"], fields["location"],
+             fields["employee_count"], fields["remote_mode"],
              opening_id),
         )
         db.commit()
@@ -573,6 +609,7 @@ def list_openings():
         "SELECT id, url, markdown, industry_experience, industry_excerpt, "
         "recruiter_name, recruiter_title, recruiter_linkedin, recruiter_email, "
         "alternate_recruiters, "
+        "title, company_name, location, employee_count, remote_mode, "
         "status, error, updated_at FROM job_openings ORDER BY id DESC"
     ).fetchall()
     return jsonify([dict(r) for r in rows])
