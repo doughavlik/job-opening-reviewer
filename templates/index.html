@@ -247,6 +247,7 @@
     .table-wrap {
       flex: 1;
       min-width: 0;
+      min-height: 0;
       display: flex; flex-direction: column;
     }
 
@@ -287,7 +288,9 @@
       white-space: nowrap;
       height: 38px;
       cursor: pointer;
+      border-right: 1px solid var(--border-row);
     }
+    .head-cell:last-child { border-right: none; }
     .head-cell.right { justify-content: flex-end; }
     .head-cell.no-sort { cursor: default; }
     .head-cell .sort-arrow {
@@ -301,7 +304,7 @@
       cursor: col-resize;
       z-index: 5;
     }
-    .resize-handle:hover { background: rgba(0,0,0,0.06); }
+    .resize-handle:hover { background: rgba(154, 106, 20, 0.18); }
 
     /* Body */
     .tbody-wrap {
@@ -328,21 +331,21 @@
       min-width: max-content;
     }
 
-    .row {
+    .tbl-row {
       align-items: center;
       height: 46px;
       border-bottom: 1px solid var(--border-row);
       cursor: pointer;
     }
-    .row:hover { background: rgba(0,0,0,0.015); }
-    .row.selected { background: var(--accent-bg); }
+    .tbl-row:hover { background: rgba(0,0,0,0.015); }
+    .tbl-row.selected { background: var(--accent-bg); }
 
     .accent-cell {
       width: 4px;
       height: 100%;
       background: transparent;
     }
-    .row.selected .accent-cell { background: var(--accent); }
+    .tbl-row.selected .accent-cell { background: var(--accent); }
 
     .cell {
       padding: 0 14px;
@@ -485,6 +488,7 @@
     .pane {
       width: 460px;
       flex-shrink: 0;
+      min-height: 0;
       border-left: 1px solid var(--border);
       background: var(--bg-pane);
       display: flex; flex-direction: column;
@@ -641,6 +645,87 @@
       background: #9a3a2a;
       color: #fff;
       border-color: #9a3a2a;
+    }
+
+    /* Recruiter detail modal */
+    .jor-modal-backdrop {
+      position: fixed; inset: 0;
+      background: rgba(20, 18, 14, 0.45);
+      z-index: 180;
+      display: flex; align-items: center; justify-content: center;
+    }
+    .jor-modal-card {
+      background: #fff;
+      border: 1px solid var(--border-input);
+      border-radius: 8px;
+      box-shadow: 0 16px 48px rgba(0,0,0,0.25);
+      width: 480px; max-width: calc(100% - 40px);
+      max-height: calc(100% - 80px);
+      display: flex; flex-direction: column;
+      min-height: 0;
+    }
+    .jor-modal-head {
+      display: flex; align-items: center;
+      padding: 14px 18px;
+      border-bottom: 1px solid var(--border);
+    }
+    .jor-modal-head .title {
+      font-family: var(--serif);
+      font-size: 17px; font-weight: 600;
+      color: var(--ink);
+    }
+    .jor-modal-head .close {
+      margin-left: auto;
+      background: none; border: none;
+      font-size: 16px; color: var(--text-meta);
+      cursor: pointer; padding: 4px 8px;
+      font-family: inherit;
+    }
+    .jor-modal-body {
+      padding: 14px 18px 18px;
+      overflow: auto;
+      min-height: 0;
+    }
+    .recruiter-section-label {
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.10em;
+      color: var(--text-meta);
+      margin: 0 0 8px;
+    }
+    .recruiter-card {
+      padding: 12px 14px;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      background: #fcfaf6;
+      margin-bottom: 10px;
+    }
+    .recruiter-card .name {
+      font-size: 14px; font-weight: 600;
+      color: var(--ink);
+    }
+    .recruiter-card .role {
+      font-size: 12px; color: var(--text-soft);
+      margin-top: 2px;
+    }
+    .recruiter-card .links {
+      display: flex; flex-wrap: wrap; gap: 12px;
+      margin-top: 8px;
+      font-size: 12px;
+    }
+    .recruiter-card .links a {
+      color: var(--accent);
+      text-decoration: none;
+      display: inline-flex; align-items: center; gap: 5px;
+    }
+    .recruiter-card .links a:hover { text-decoration: underline; }
+    .recruiter-card.muted { background: #fbfaf7; }
+    .recruiter-card .empty {
+      font-size: 12px; color: var(--text-meta); font-style: italic;
+    }
+    .recruiter-link-btn {
+      cursor: pointer; user-select: none;
+      text-decoration: underline dotted; text-underline-offset: 2px;
     }
 
     /* Toasts */
@@ -1176,9 +1261,80 @@ function recruiterCell(row) {
     cell.appendChild(el('span', { cls: 'name', text: '—', style: { color: 'var(--text-meta)' } }));
     return cell;
   }
+  cell.style.cursor = 'pointer';
+  cell.title = 'Click for details';
+  cell.addEventListener('click', (e) => { e.stopPropagation(); showRecruiterModal(row); });
   cell.appendChild(el('span', { cls: 'name', text: name || '(unnamed)' }));
   if (alts > 0) cell.appendChild(el('span', { cls: 'alts', text: '+' + alts }));
   return cell;
+}
+
+function parseAlternates(raw) {
+  if (!raw) return [];
+  try { const v = JSON.parse(raw); return Array.isArray(v) ? v : []; }
+  catch { return []; }
+}
+
+function recruiterCard(rec, label) {
+  const card = el('div', { cls: 'recruiter-card' + (label === 'Alternate' ? ' muted' : '') });
+  const name = (rec.name || '').trim();
+  const title = (rec.title || '').trim();
+  const linkedin = (rec.linkedin || '').trim();
+  const email = (rec.email || '').trim();
+  if (!name && !title && !linkedin && !email) {
+    card.appendChild(el('div', { cls: 'empty', text: 'No details on file.' }));
+    return card;
+  }
+  card.appendChild(el('div', { cls: 'name', text: name || '(unnamed)' }));
+  if (title) card.appendChild(el('div', { cls: 'role', text: title }));
+  if (linkedin || email) {
+    const links = el('div', { cls: 'links' });
+    if (linkedin) links.appendChild(el('a', { attrs: { href: linkedin, target: '_blank', rel: 'noopener' }, html: '<i class="bi bi-linkedin"></i> LinkedIn' }));
+    if (email) links.appendChild(el('a', { attrs: { href: 'mailto:' + email }, html: '<i class="bi bi-envelope"></i> ' + escapeHtml(email) }));
+    card.appendChild(links);
+  }
+  return card;
+}
+
+let openModalEl = null;
+function dismissModal() { if (openModalEl) { openModalEl.remove(); openModalEl = null; document.removeEventListener('keydown', onModalEsc); } }
+function onModalEsc(e) { if (e.key === 'Escape') dismissModal(); }
+
+function showRecruiterModal(row) {
+  dismissModal();
+  const primary = {
+    name: (row.recruiter_name || '').trim(),
+    title: (row.recruiter_title || '').trim(),
+    linkedin: (row.recruiter_linkedin || '').trim(),
+    email: (row.recruiter_email || '').trim(),
+  };
+  const alts = parseAlternates(row.alternate_recruiters);
+
+  const backdrop = el('div', { cls: 'jor-modal-backdrop', on: { click: (e) => { if (e.target === backdrop) dismissModal(); } } });
+  const card = el('div', { cls: 'jor-modal-card' });
+  const head = el('div', { cls: 'jor-modal-head' });
+  head.appendChild(el('div', { cls: 'title', text: 'Recruiters' }));
+  head.appendChild(el('button', { cls: 'close', html: '&times;', attrs: { title: 'Close' }, on: { click: dismissModal } }));
+  const body = el('div', { cls: 'jor-modal-body' });
+
+  body.appendChild(el('div', { cls: 'recruiter-section-label', text: 'Primary recruiter' }));
+  body.appendChild(recruiterCard(primary, 'Primary'));
+
+  body.appendChild(el('div', { cls: 'recruiter-section-label', text: `Alternate recruiters${alts.length ? ' (' + alts.length + ')' : ''}`, style: { marginTop: '14px' } }));
+  if (alts.length === 0) {
+    body.appendChild(el('div', { cls: 'recruiter-card muted' },
+      el('div', { cls: 'empty', text: 'No alternates suggested.' }),
+    ));
+  } else {
+    for (const alt of alts) body.appendChild(recruiterCard(alt, 'Alternate'));
+  }
+
+  card.appendChild(head);
+  card.appendChild(body);
+  backdrop.appendChild(card);
+  document.body.appendChild(backdrop);
+  document.addEventListener('keydown', onModalEsc);
+  openModalEl = backdrop;
 }
 
 function actionsCell(row) {
@@ -1294,7 +1450,7 @@ function buildCell(col, row) {
 
 function buildFrozenRow(row) {
   const isSel = row.id === selectedRowId;
-  const r = el('div', { cls: 'row' + (isSel ? ' selected' : ''), attrs: { 'data-id': row.id }, style: { display: 'grid', gridTemplateColumns: frozenTemplate(), height: ROW_H + 'px' },
+  const r = el('div', { cls: 'tbl-row' + (isSel ? ' selected' : ''), attrs: { 'data-id': row.id }, style: { display: 'grid', gridTemplateColumns: frozenTemplate(), height: ROW_H + 'px' },
     on: { click: () => openRowInPane(row.id) }
   });
   r.appendChild(el('div', { cls: 'accent-cell' }));
@@ -1306,7 +1462,7 @@ function buildFrozenRow(row) {
 
 function buildScrollRow(row) {
   const isSel = row.id === selectedRowId;
-  const r = el('div', { cls: 'row' + (isSel ? ' selected' : ''), attrs: { 'data-id': row.id }, style: { display: 'grid', gridTemplateColumns: scrollTemplate(), height: ROW_H + 'px' },
+  const r = el('div', { cls: 'tbl-row' + (isSel ? ' selected' : ''), attrs: { 'data-id': row.id }, style: { display: 'grid', gridTemplateColumns: scrollTemplate(), height: ROW_H + 'px' },
     on: { click: () => openRowInPane(row.id) }
   });
   for (const col of visibleCols(SCROLL_COLS)) {
@@ -1534,8 +1690,7 @@ function paneRecruiterValue(row) {
   const name = (row.recruiter_name || '').trim();
   const linkedin = (row.recruiter_linkedin || '').trim();
   const email = (row.recruiter_email || '').trim();
-  let alts = 0;
-  try { const v = JSON.parse(row.alternate_recruiters || '[]'); if (Array.isArray(v)) alts = v.length; } catch {}
+  const alts = parseAlternates(row.alternate_recruiters).length;
 
   if (!name && !linkedin && !email && alts === 0) {
     wrap.textContent = '—';
@@ -1545,7 +1700,8 @@ function paneRecruiterValue(row) {
   const parts = [];
   if (name) parts.push(name); else parts.push('(unnamed)');
   if (alts > 0) parts.push(`+${alts} alt${alts > 1 ? 's' : ''}`);
-  wrap.appendChild(document.createTextNode(parts.join(' · ')));
+  const trigger = el('span', { cls: 'recruiter-link-btn', text: parts.join(' · '), attrs: { title: 'Click for full recruiter details' }, on: { click: (e) => { e.preventDefault(); e.stopPropagation(); showRecruiterModal(row); } } });
+  wrap.appendChild(trigger);
 
   const links = [];
   if (linkedin) {
@@ -1631,8 +1787,8 @@ function startResize(e, key) {
     widths[key] = Math.max(60, startW + (ev.clientX - startX));
     renderHeader();
     // Update each row's grid template
-    document.querySelectorAll('#tbodyFrozen .row').forEach(r => r.style.gridTemplateColumns = frozenTemplate());
-    document.querySelectorAll('#tbodyScrollInner .row').forEach(r => r.style.gridTemplateColumns = scrollTemplate());
+    document.querySelectorAll('#tbodyFrozen .tbl-row').forEach(r => r.style.gridTemplateColumns = frozenTemplate());
+    document.querySelectorAll('#tbodyScrollInner .tbl-row').forEach(r => r.style.gridTemplateColumns = scrollTemplate());
   }
   function up() {
     window.removeEventListener('mousemove', move);
